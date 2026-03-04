@@ -1,0 +1,114 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Quadruped Robot with Adaptive Control",
+  "projectDescription": "12-DOF quadruped robot simulation with reinforcement learning-based adaptive gait control for rough terrain navigation using MuJoCo, PPO, and ROS2",
+  "theme": "aspen",
+  "primaryColor": "#ee6d2d",
+  "lightColor": "#36ab56",
+  "darkColor": "#73a2f0",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/robot-design",
+              "concepts/gait-control",
+              "concepts/inverse-kinematics",
+              "concepts/reinforcement-learning"
+            ]
+          },
+          {
+            "group": "Usage Guides",
+            "pages": [
+              "guides/running-simulations",
+              "guides/training-models",
+              "guides/ros2-integration",
+              "guides/gui-joystick",
+              "guides/baseline-vs-adaptive"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "dev/project-structure",
+              "dev/debugging",
+              "dev/custom-terrains",
+              "dev/extending-controllers"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Controllers",
+            "pages": [
+              "api/controllers/diagonal-gait",
+              "api/controllers/adaptive-gait"
+            ]
+          },
+          {
+            "group": "Environments",
+            "pages": [
+              "api/environments/adaptive-gait-env",
+              "api/environments/residual-walk-env"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utils/inverse-kinematics",
+              "api/utils/control-utils",
+              "api/utils/sensor-utils"
+            ]
+          },
+          {
+            "group": "Training Scripts",
+            "pages": [
+              "api/training/train-adaptive-gait",
+              "api/training/play-adaptive-policy"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "12-DOF quadruped with parallel SCARA leg mechanism (5-bar linkage)",
+    "Diagonal gait controller with Bézier curve swing trajectories",
+    "PPO-based reinforcement learning for adaptive gait parameters and residual corrections",
+    "MuJoCo physics simulation with flat and rough terrain environments",
+    "ROS2 integration for real-time control and sensor data streaming",
+    "PyQt5 GUI with joystick support for teleoperation",
+    "3DOF inverse kinematics solver for parallel SCARA mechanism",
+    "Comprehensive testing framework comparing baseline vs adaptive performance"
+  ],
+  "publicApiSurface": [
+    "DiagonalGaitController - Trot gait generator with diagonal swing pairs",
+    "AdaptiveGaitController - Gait controller with online parameter adaptation",
+    "AdaptiveGaitEnv - Gymnasium environment for adaptive gait + residual learning",
+    "ResidualWalkEnv - Gymnasium environment for residual-only learning",
+    "solve_leg_ik_3dof() - 3DOF parallel SCARA inverse kinematics",
+    "parallel_scara_ik() - 2D parallel SCARA IK solver",
+    "GaitParameters - Configuration dataclass for gait parameters",
+    "SensorReader - MuJoCo sensor data reader utility",
+    "apply_leg_angles() - Apply joint angles to MuJoCo leg actuators",
+    "train_adaptive_gait_ppo.py - PPO training script for adaptive gait",
+    "play_adaptive_policy.py - Policy evaluation and visualization script",
+    "compare_baseline_adaptive.py - Benchmark test comparing baseline vs adaptive performance",
+    "RobotControlNode - ROS2 node for camera/sensor publishing and command subscription",
+    "GuiRosNode - ROS2 node for GUI interface with joystick control"
+  ]
+}
