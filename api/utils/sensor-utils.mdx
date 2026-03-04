@@ -30,7 +30,7 @@ class SensorReader:
 
 ```python
 import mujoco
-from source.utils.sensor_utils import SensorReader
+from utils.sensor_utils import SensorReader
 
 # Load model and create data
 model = mujoco.MjModel.from_xml_path("robot.xml")
@@ -231,7 +231,7 @@ All sensor readings follow MuJoCo conventions:
 ```python
 import mujoco
 import numpy as np
-from source.utils.sensor_utils import SensorReader
+from utils.sensor_utils import SensorReader
 
 # Initialize simulation
 model = mujoco.MjModel.from_xml_path("robot.xml")

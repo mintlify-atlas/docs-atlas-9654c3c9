@@ -45,8 +45,8 @@ def apply_leg_angles(
 
 ```python
 import mujoco
-from source.ik import solve_leg_ik_3dof
-from source.utils.control_utils import apply_leg_angles
+from ik import solve_leg_ik_3dof
+from utils.control_utils import apply_leg_angles
 import numpy as np
 
 # Load MuJoCo model
@@ -71,7 +71,7 @@ if angles:
 
 ```python
 # Control all four legs simultaneously
-from source.utils.control_utils import apply_leg_angles
+from utils.control_utils import apply_leg_angles
 import numpy as np
 
 # Define targets for each leg
