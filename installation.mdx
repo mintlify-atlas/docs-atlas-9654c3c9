@@ -1,0 +1,535 @@
+---
+title: Installation
+description: Set up your development environment with ROS2 Jazzy, Python dependencies, and system requirements
+---
+
+## System Requirements
+
+Before installing, ensure your system meets these requirements:
+
+<CardGroup cols={2}>
+  <Card title="Operating System" icon="ubuntu">
+    **Ubuntu 24.04 LTS** (Noble Numbat)
+    
+    Other Linux distributions may work but are not officially supported.
+  </Card>
+  <Card title="Hardware" icon="microchip">
+    **Minimum:**
+    - 4 CPU cores
+    - 8 GB RAM
+    - GPU optional (CPU rendering works)
+    
+    **Recommended for training:**
+    - 12+ CPU cores
+    - 16+ GB RAM
+    - NVIDIA GPU with CUDA
+  </Card>
+</CardGroup>
+
+<Warning>
+  ROS2 Jazzy specifically requires Ubuntu 24.04. If you're on Ubuntu 22.04 or earlier, consider using a Docker container or upgrading your system.
+</Warning>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Install System Dependencies">
+    Update your package list and install required system tools:
+    
+    ```bash
+    sudo apt update && sudo apt install -y \
+        software-properties-common \
+        curl \
+        git \
+        python3-pip \
+        python3-venv
+    ```
+  </Step>
+  
+  <Step title="Install ROS2 Jazzy">
+    Follow these commands to set up ROS2 Jazzy on Ubuntu 24.04:
+    
+    ### Add ROS2 Repository
+    
+    ```bash
+    # Enable universe repository
+    sudo add-apt-repository universe
+    sudo apt update
+    
+    # Add ROS2 GPG key
+    sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | \
+        sudo apt-key add -
+    
+    # Add ROS2 repository
+    sudo sh -c 'echo "deb [arch=$(dpkg --print-architecture)] \
+        http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/ros2-latest.list'
+    ```
+    
+    ### Install ROS2 Packages
+    
+    ```bash
+    # Update package list
+    sudo apt update
+    
+    # Install ROS2 Jazzy Desktop (includes RViz, demos, tutorials)
+    sudo apt install -y ros-jazzy-desktop
+    
+    # Install colcon build tools
+    sudo apt install -y python3-colcon-common-extensions
+    
+    # Install ROS2 Python packages
+    sudo apt install -y \
+        ros-jazzy-rclpy \
+        ros-jazzy-std-msgs \
+        ros-jazzy-sensor-msgs \
+        ros-jazzy-std-srvs \
+        ros-jazzy-cv-bridge
+    ```
+    
+    ### Verify Installation
+    
+    ```bash
+    source /opt/ros/jazzy/setup.bash
+    ros2 --version
+    ```
+    
+    You should see output like:
+    ```
+    ros2 cli version: 0.XX.X
+    ```
+    
+    <Note>
+      Add `source /opt/ros/jazzy/setup.bash` to your `~/.bashrc` to automatically source ROS2 in every terminal.
+    </Note>
+  </Step>
+  
+  <Step title="Clone the Repository">
+    Get the source code from your repository:
+    
+    ```bash
+    cd ~
+    git clone <repository-url> walk2
+    cd walk2
+    ```
+    
+    Replace `<repository-url>` with your actual Git repository URL.
+  </Step>
+  
+  <Step title="Install Python Dependencies">
+    Install all required Python packages using the provided requirements file:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    This installs:
+    
+    **Core Simulation:**
+    - `mujoco>=3.0.0` - Physics engine
+    - `numpy>=1.24.0` - Numerical computing
+    - `scipy>=1.10.0` - Scientific computing
+    
+    **Gait Control:**
+    - `transitions>=0.9.0` - State machine implementation
+    - `bezier>=2023.7.28` - Bézier curve generation
+    
+    **Reinforcement Learning:**
+    - `stable-baselines3>=2.0.0` - RL algorithms (PPO)
+    - `torch>=2.0.0` - Deep learning framework
+    
+    **Visualization:**
+    - `matplotlib>=3.7.0` - Plotting
+    - `pandas>=2.0.0` - Data analysis
+    
+    **GUI (Optional):**
+    - `PyQt5>=5.15.0` - GUI framework
+    - `pyqtgraph>=0.13.0` - Real-time plotting
+    - `pygame>=2.5.0` - Joystick interface
+    - `pillow>=10.0.0` - Image processing
+    
+    <Accordion title="Having issues with PyTorch installation?">
+      If PyTorch installation fails or you want GPU support:
+      
+      **CPU-only:**
+      ```bash
+      pip install torch --index-url https://download.pytorch.org/whl/cpu
+      ```
+      
+      **CUDA 11.8:**
+      ```bash
+      pip install torch --index-url https://download.pytorch.org/whl/cu118
+      ```
+      
+      **CUDA 12.1:**
+      ```bash
+      pip install torch --index-url https://download.pytorch.org/whl/cu121
+      ```
+      
+      See [PyTorch installation guide](https://pytorch.org/get-started/locally/) for more options.
+    </Accordion>
+  </Step>
+  
+  <Step title="Verify Installation">
+    Test that everything is working:
+    
+    ```bash
+    # Source ROS2 (if not in ~/.bashrc)
+    source /opt/ros/jazzy/setup.bash
+    
+    # Run a simple simulation
+    python3 height_control.py --terrain flat
+    ```
+    
+    You should see a MuJoCo viewer window open with the quadruped robot walking on flat terrain.
+    
+    Press `Space` to pause/resume, and close the window when satisfied.
+  </Step>
+</Steps>
+
+## Post-Installation Setup
+
+### Configure ROS2 Environment
+
+Add ROS2 sourcing to your shell configuration:
+
+```bash
+echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
+
+Optionally, set your ROS2 domain ID to avoid conflicts with other robots:
+
+```bash
+echo "export ROS_DOMAIN_ID=42" >> ~/.bashrc
+```
+
+### Test ROS2 Integration
+
+Verify ROS2 topics and services work:
+
+```bash
+# Terminal 1: Start GUI
+cd ~/walk2/gui
+python3 gui.py
+```
+
+```bash
+# Terminal 2: Start simulation
+cd ~/walk2
+python3 sim.py --terrain flat
+```
+
+You should see:
+- GUI window with camera feed
+- Robot walking in MuJoCo viewer
+- ROS2 messages flowing between processes
+
+Stop both processes with `Ctrl+C`.
+
+### Optional: Install Additional Tools
+
+**TensorBoard** (for monitoring training):
+```bash
+pip install tensorboard
+```
+
+**RQT** (ROS2 debugging tools):
+```bash
+sudo apt install -y ros-jazzy-rqt ros-jazzy-rqt-common-plugins
+```
+
+**VS Code** (recommended IDE):
+```bash
+sudo snap install code --classic
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ImportError: No module named 'rclpy'">
+    ROS2 Python packages are not in your Python path. Solutions:
+    
+    1. Make sure you sourced ROS2:
+       ```bash
+       source /opt/ros/jazzy/setup.bash
+       ```
+    
+    2. If using a virtual environment, ROS2 packages may not be visible. Either:
+       - Don't use a venv for this project, OR
+       - Install `rclpy` in your venv: `pip install rclpy`
+  </Accordion>
+  
+  <Accordion title="MuJoCo: GLEW initialization failed">
+    This happens when running without a display (e.g., over SSH).
+    
+    **Solution 1:** Enable X11 forwarding
+    ```bash
+    ssh -X user@hostname
+    ```
+    
+    **Solution 2:** Use headless rendering
+    ```bash
+    export MUJOCO_GL=egl
+    python3 height_control.py
+    ```
+    
+    **Solution 3:** Use osmesa (software rendering)
+    ```bash
+    export MUJOCO_GL=osmesa
+    python3 height_control.py
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: Could not find model file">
+    Make sure you're running scripts from the project root directory:
+    
+    ```bash
+    cd ~/walk2
+    python3 height_control.py  # Good
+    ```
+    
+    NOT:
+    ```bash
+    cd ~/walk2/tests
+    python3 ../height_control.py  # Bad - relative paths break
+    ```
+  </Accordion>
+  
+  <Accordion title="PyTorch: CUDA not available">
+    If you have an NVIDIA GPU but PyTorch doesn't detect it:
+    
+    1. Check NVIDIA drivers:
+       ```bash
+       nvidia-smi
+       ```
+    
+    2. Verify CUDA version:
+       ```bash
+       nvcc --version
+       ```
+    
+    3. Reinstall PyTorch with correct CUDA version:
+       ```bash
+       pip uninstall torch
+       pip install torch --index-url https://download.pytorch.org/whl/cu118
+       ```
+    
+    4. Test in Python:
+       ```python
+       import torch
+       print(torch.cuda.is_available())  # Should print True
+       ```
+  </Accordion>
+  
+  <Accordion title="ROS2: No executable found">
+    If ROS2 commands aren't found:
+    
+    ```bash
+    # Check if ROS2 is installed
+    ls /opt/ros/jazzy
+    
+    # Source again
+    source /opt/ros/jazzy/setup.bash
+    
+    # Add to bashrc
+    echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+    ```
+  </Accordion>
+  
+  <Accordion title="GUI: No joystick detected">
+    The GUI works without a joystick (buttons only). If you have a gamepad:
+    
+    1. Install jstest:
+       ```bash
+       sudo apt install joystick
+       ```
+    
+    2. Test joystick:
+       ```bash
+       jstest /dev/input/js0
+       ```
+    
+    3. If not detected, check permissions:
+       ```bash
+       sudo chmod a+rw /dev/input/js0
+       ```
+    
+    4. Restart the GUI application
+  </Accordion>
+</AccordionGroup>
+
+## Development Setup
+
+For development work, install additional tools:
+
+### Code Quality Tools
+
+```bash
+pip install \
+    black \
+    flake8 \
+    mypy \
+    pytest
+```
+
+### Pre-commit Hooks (Optional)
+
+```bash
+pip install pre-commit
+cd ~/walk2
+pre-commit install
+```
+
+### Jupyter Notebooks (Optional)
+
+Useful for data analysis and experimentation:
+
+```bash
+pip install jupyter notebook
+```
+
+## Verification Checklist
+
+Before proceeding to the quick start, verify:
+
+<Checklist>
+  <Check title="ROS2 Jazzy installed and sourced" />
+  <Check title="Python dependencies installed (pip list shows mujoco, stable-baselines3, etc.)" />
+  <Check title="Repository cloned to ~/walk2" />
+  <Check title="Simple simulation runs: python3 height_control.py" />
+  <Check title="Model files exist in model/ directory" />
+  <Check title="Pre-trained model exists in runs/ directory" />
+</Checklist>
+
+## Next Steps
+
+With installation complete, you're ready to run your first simulation!
+
+<Card title="Quick Start Guide" icon="rocket" href="/quickstart">
+  Run the baseline vs adaptive comparison and see RL-based control in action.
+</Card>
+
+## Hardware Acceleration (Advanced)
+
+### NVIDIA GPU Setup
+
+For faster training with GPU acceleration:
+
+```bash
+# Install NVIDIA drivers (if not already installed)
+sudo ubuntu-drivers autoinstall
+
+# Install CUDA toolkit
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-ubuntu2404.pin
+sudo mv cuda-ubuntu2404.pin /etc/apt/preferences.d/cuda-repository-pin-600
+sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub
+sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/ /"
+sudo apt update
+sudo apt install -y cuda-toolkit-12-1
+
+# Add to PATH
+echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
+
+# Verify
+nvidia-smi
+nvcc --version
+```
+
+### Multi-core Training Setup
+
+For faster training on CPU:
+
+```bash
+# Check number of cores
+nproc
+
+# Set environment variables for optimal performance
+echo 'export OMP_NUM_THREADS=12' >> ~/.bashrc
+echo 'export MKL_NUM_THREADS=12' >> ~/.bashrc
+source ~/.bashrc
+```
+
+When training, use the `--n-envs` flag to match your core count:
+
+```bash
+python3 train_residual_ppo_v2.py --n-envs 12
+```
+
+## Docker Alternative (Optional)
+
+If you prefer containerized development:
+
+```dockerfile
+FROM ubuntu:24.04
+
+# Install ROS2 Jazzy
+RUN apt update && apt install -y \
+    software-properties-common curl \
+    && add-apt-repository universe \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | apt-key add - \
+    && sh -c 'echo "deb [arch=$(dpkg --print-architecture)] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2-latest.list' \
+    && apt update \
+    && apt install -y ros-jazzy-desktop python3-colcon-common-extensions
+
+# Install Python dependencies
+COPY requirements.txt /tmp/
+RUN pip install -r /tmp/requirements.txt
+
+# Source ROS2
+RUN echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+
+WORKDIR /workspace
+CMD ["/bin/bash"]
+```
+
+Build and run:
+
+```bash
+docker build -t quadruped-robot .
+docker run -it --gpus all -v $(pwd):/workspace quadruped-robot
+```
+
+## Reference
+
+### Installed Packages
+
+After installation, you should have:
+
+| Package | Version | Purpose |
+|---------|---------|--------|
+| ROS2 Jazzy | Latest | Robot middleware |
+| MuJoCo | ≥3.0.0 | Physics simulation |
+| Stable Baselines 3 | ≥2.0.0 | RL training |
+| PyTorch | ≥2.0.0 | Neural networks |
+| NumPy | ≥1.24.0 | Numerical computing |
+| Matplotlib | ≥3.7.0 | Visualization |
+
+### Directory Structure
+
+After installation:
+
+```
+~/walk2/
+├── model/                      # MuJoCo XML models
+│   ├── world.xml              # Flat terrain
+│   ├── world_train.xml        # Rough terrain
+│   ├── robot.xml              # Robot definition
+│   └── assets/                # STL meshes
+├── controllers/               # Control algorithms
+│   ├── gait_controller.py
+│   └── adaptive_gait_controller.py
+├── envs/                      # Gym environments
+│   └── adaptive_gait_env.py
+├── utils/                     # Utilities
+│   ├── ik.py                 # Inverse kinematics
+│   └── control_utils.py
+├── gui/                       # PyQt5 interface
+├── tests/                     # Test scripts
+├── runs/                      # Trained models
+├── height_control.py          # Simple simulation
+├── sim.py                     # ROS2 simulation
+└── requirements.txt           # Dependencies
+```

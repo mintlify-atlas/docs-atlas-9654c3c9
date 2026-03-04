@@ -1,0 +1,173 @@
+---
+title: 'Running Simulations'
+description: 'Run standalone quadruped simulations with MuJoCo viewer'
+---
+
+## Overview
+
+The `height_control.py` script provides a standalone simulation environment for the quadruped robot using the MuJoCo physics engine. You can run simulations with different terrain configurations and observe the robot's gait controller in action.
+
+## Quick Start
+
+<Steps>
+  <Step title="Navigate to Source Directory">
+    ```bash
+    cd ~/workspace/source
+    ```
+  </Step>
+
+  <Step title="Run Basic Simulation">
+    Launch the simulation with rough terrain (default):
+    ```bash
+    python3 height_control.py
+    ```
+    
+    The MuJoCo viewer window will open, showing the robot walking on rough terrain.
+  </Step>
+
+  <Step title="Control the View">
+    The camera automatically follows the robot. You can interact with the viewer:
+    - **Rotate view**: Click and drag with left mouse button
+    - **Pan**: Click and drag with right mouse button
+    - **Zoom**: Scroll mouse wheel
+    - **Pause/Resume**: Press spacebar
+  </Step>
+</Steps>
+
+## Terrain Options
+
+The simulation supports two terrain types:
+
+<Tabs>
+  <Tab title="Rough Terrain (Default)">
+    Run with challenging terrain that includes obstacles and height variations:
+    ```bash
+    python3 height_control.py --terrain rough
+    ```
+    
+    - **Model file**: `model/world_train.xml`
+    - **Use case**: Testing robustness and adaptive controllers
+    - **Expected behavior**: Robot navigates uneven surfaces
+  </Tab>
+
+  <Tab title="Flat Terrain">
+    Run with smooth, flat ground for baseline testing:
+    ```bash
+    python3 height_control.py --terrain flat
+    ```
+    
+    - **Model file**: `model/world.xml`
+    - **Use case**: Baseline performance measurement
+    - **Expected behavior**: Smooth, predictable walking
+  </Tab>
+</Tabs>
+
+## Running Headless
+
+For automated testing or data collection without the GUI, you can run simulations in headless mode by modifying the script to remove the viewer:
+
+```python
+# In height_control.py, replace the viewer loop with:
+mujoco.mj_step(model, data)
+# Process your data without visualization
+```
+
+Or create a headless wrapper script:
+
+```python headless_sim.py
+import mujoco
+import numpy as np
+from height_control import GAIT_PARAMS, apply_gait_targets
+from gait_controller import DiagonalGaitController
+
+model = mujoco.MjModel.from_xml_path("model/world_train.xml")
+data = mujoco.MjData(model)
+controller = DiagonalGaitController(GAIT_PARAMS)
+controller.reset()
+
+# Run for 1000 steps
+for _ in range(1000):
+    apply_gait_targets(controller, model.opt.timestep)
+    mujoco.mj_step(model, data)
+    # Collect data here
+```
+
+## Gait Parameters
+
+The default gait parameters are defined in `height_control.py:17`:
+
+```python
+GAIT_PARAMS = GaitParameters(
+    body_height=0.05,     # 5cm body clearance
+    step_length=0.06,     # 6cm forward stride
+    step_height=0.04,     # 4cm foot lift
+    cycle_time=0.8        # 0.8s per gait cycle
+)
+```
+
+### Expected Performance
+
+<CodeGroup>
+  ```python Velocity Calculation
+  # Computed from gait parameters
+  expected_velocity_x = step_length / cycle_time
+  # = 0.06m / 0.8s = 0.075 m/s
+  ```
+
+  ```bash Expected Output
+  Loading world: model/world_train.xml (rough terrain)
+  # Robot walks forward, camera follows
+  # Press Ctrl+C to exit
+  Demo finished
+  ```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="IK Failed Warning">
+    If you see warnings like:
+    ```
+    [WARN] IK failed for leg FL with target [x, y, z]
+    ```
+    
+    This indicates the inverse kinematics solver couldn't find a valid joint configuration. Common causes:
+    - Target position is out of reach
+    - Gait parameters are too aggressive
+    - Solution: Reduce `step_length` or `step_height` in `GAIT_PARAMS`
+  </Accordion>
+
+  <Accordion title="Robot Falls or Tips Over">
+    If the robot becomes unstable:
+    - Reduce `step_height` (default: 0.04)
+    - Increase `cycle_time` (default: 0.8)
+    - Lower `body_height` (default: 0.05)
+    - Switch to flat terrain for testing
+  </Accordion>
+
+  <Accordion title="Slow Performance">
+    If the simulation runs slowly:
+    - Close other applications
+    - The simulation uses real-time stepping (see `height_control.py:84`)
+    - Remove the sleep delay for faster-than-realtime execution
+  </Accordion>
+</AccordionGroup>
+
+## Key Source Files
+
+- `height_control.py` - Main simulation script
+- `gait_controller.py` - Diagonal gait pattern generator
+- `ik.py` - Inverse kinematics solver (3-DOF legs)
+- `model/world.xml` - Flat terrain definition
+- `model/world_train.xml` - Rough terrain definition
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Train Adaptive Models" icon="brain" href="./training-models">
+    Learn to train PPO policies that adapt to terrain
+  </Card>
+  <Card title="ROS2 Integration" icon="network-wired" href="./ros2-integration">
+    Connect the simulation to ROS2 for distributed control
+  </Card>
+</CardGroup>

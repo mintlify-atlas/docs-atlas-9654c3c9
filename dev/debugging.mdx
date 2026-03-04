@@ -1,0 +1,776 @@
+---
+title: Debugging
+description: Techniques for debugging MuJoCo simulations, RL training, and ROS2 integration
+---
+
+This guide covers common debugging scenarios and tools for the quadruped robot project.
+
+## MuJoCo Simulation Debugging
+
+### Visualizing Contact Forces
+
+<Accordion title="Enable Contact Visualization">
+
+MuJoCo provides built-in contact force visualization:
+
+```python
+import mujoco
+import mujoco.viewer
+
+model = mujoco.MjModel.from_xml_path("model/world_train.xml")
+data = mujoco.MjData(model)
+
+# Launch viewer
+with mujoco.viewer.launch_passive(model, data) as viewer:
+    # Enable contact forces in viewer
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = True
+    
+    # Run simulation
+    while viewer.is_running():
+        mujoco.mj_step(model, data)
+        viewer.sync()
+```
+
+**Keyboard Shortcuts**:
+- `F1`: Toggle contact points
+- `F2`: Toggle contact forces
+- `Space`: Pause/resume
+- `Ctrl+P`: Screenshot
+
+</Accordion>
+
+### Checking Joint Limits
+
+<Accordion title="Detect Joint Limit Violations">
+
+```python
+def check_joint_limits(model, data):
+    """Print warnings for joints exceeding limits."""
+    violations = []
+    
+    for i in range(model.njnt):
+        joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+        qpos_addr = model.jnt_qposadr[i]
+        qpos = data.qpos[qpos_addr]
+        
+        # Get joint limits
+        if model.jnt_limited[i]:
+            lower = model.jnt_range[i, 0]
+            upper = model.jnt_range[i, 1]
+            
+            if qpos < lower or qpos > upper:
+                violations.append({
+                    "joint": joint_name,
+                    "value": qpos,
+                    "range": (lower, upper)
+                })
+    
+    if violations:
+        print("⚠ Joint limit violations:")
+        for v in violations:
+            print(f"  {v['joint']}: {v['value']:.4f} not in [{v['range'][0]:.4f}, {v['range'][1]:.4f}]")
+    
+    return violations
+
+# Usage in simulation loop
+for step in range(1000):
+    mujoco.mj_step(model, data)
+    if step % 100 == 0:
+        check_joint_limits(model, data)
+```
+
+</Accordion>
+
+### IK Solution Debugging
+
+<Accordion title="Visualize IK Targets and Solutions">
+
+**Script**: `~/workspace/source/debug_model.py`
+
+Add visualization markers for IK targets:
+
+```python
+import numpy as np
+from ik import solve_leg_ik_3dof
+
+def visualize_ik_target(viewer, leg_name, target_pos, reached_pos=None):
+    """Add sphere markers for IK targets.
+    
+    Args:
+        viewer: MuJoCo viewer instance
+        leg_name: "FL", "FR", "RL", or "RR"
+        target_pos: Desired foot position [x, y, z]
+        reached_pos: Actual reached position (if available)
+    """
+    # Target (green sphere)
+    viewer.add_marker(
+        pos=target_pos,
+        size=[0.005, 0.005, 0.005],
+        rgba=[0, 1, 0, 0.5],
+        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        label=f"{leg_name}_target"
+    )
+    
+    # Reached position (red sphere)
+    if reached_pos is not None:
+        viewer.add_marker(
+            pos=reached_pos,
+            size=[0.003, 0.003, 0.003],
+            rgba=[1, 0, 0, 0.8],
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            label=f"{leg_name}_actual"
+        )
+        
+        # Error line
+        error = np.linalg.norm(target_pos - reached_pos)
+        if error > 0.001:  # 1mm threshold
+            print(f"{leg_name} IK error: {error*1000:.2f}mm")
+```
+
+**Test IK Reachability**:
+```python
+from ik import solve_leg_ik_3dof
+
+# Test various target positions
+targets = [
+    [0.0, 0.0, -0.04],   # Straight down
+    [0.05, 0.0, -0.05],  # Forward
+    [0.0, 0.02, -0.04],  # Lateral
+]
+
+for target in targets:
+    result = solve_leg_ik_3dof(target, L1=0.045, L2=0.06, base_dist=0.021, mode=2)
+    if result is None:
+        print(f"⚠ Target {target} is UNREACHABLE")
+    else:
+        tilt, shoulder_A, shoulder_B = result
+        print(f"✓ Target {target}: tilt={np.degrees(tilt):.1f}°, "
+              f"shoulders=[{np.degrees(shoulder_A):.1f}°, {np.degrees(shoulder_B):.1f}°]")
+```
+
+See `~/workspace/source/ik.py:131` for built-in test suite.
+
+</Accordion>
+
+### Logging Sensor Data
+
+<Accordion title="Record Simulation Data to CSV">
+
+```python
+import csv
+from utils.sensor_utils import SensorReader
+
+class SimulationLogger:
+    def __init__(self, filename="sim_log.csv"):
+        self.file = open(filename, 'w', newline='')
+        self.writer = csv.writer(self.file)
+        
+        # Header
+        self.writer.writerow([
+            "time", "body_x", "body_y", "body_z",
+            "roll", "pitch", "yaw",
+            "vel_x", "vel_y", "vel_z",
+            "FL_contact", "FR_contact", "RL_contact", "RR_contact"
+        ])
+    
+    def log_step(self, time, sensor_reader, foot_contacts):
+        body_pos = sensor_reader.read_sensor("body_pos")
+        body_quat = sensor_reader.get_body_quaternion()
+        body_vel = sensor_reader.read_sensor("body_linvel")
+        
+        # Convert quaternion to Euler
+        from envs.adaptive_gait_env import quat_to_euler
+        roll, pitch, yaw = quat_to_euler(body_quat, degrees=True)
+        
+        self.writer.writerow([
+            f"{time:.4f}",
+            f"{body_pos[0]:.6f}", f"{body_pos[1]:.6f}", f"{body_pos[2]:.6f}",
+            f"{roll:.2f}", f"{pitch:.2f}", f"{yaw:.2f}",
+            f"{body_vel[0]:.4f}", f"{body_vel[1]:.4f}", f"{body_vel[2]:.4f}",
+            int(foot_contacts["FL"]), int(foot_contacts["FR"]),
+            int(foot_contacts["RL"]), int(foot_contacts["RR"])
+        ])
+    
+    def close(self):
+        self.file.close()
+
+# Usage
+logger = SimulationLogger("debug_sim.csv")
+for step in range(5000):
+    # ... run simulation ...
+    logger.log_step(step * dt, sensor_reader, foot_contacts)
+logger.close()
+
+# Analyze with pandas
+import pandas as pd
+df = pd.read_csv("debug_sim.csv")
+print(df.describe())
+```
+
+</Accordion>
+
+## RL Training Debugging
+
+### Monitoring Training Progress
+
+<Accordion title="TensorBoard Visualization">
+
+Launch TensorBoard to monitor training metrics:
+
+```bash
+tensorboard --logdir runs/ --port 6006
+```
+
+**Key Metrics to Watch**:
+
+1. **`rollout/ep_rew_mean`**: Average episode reward
+   - Should increase over time
+   - Plateaus indicate convergence or reward saturation
+
+2. **`train/entropy_loss`**: Policy entropy
+   - High entropy = exploration
+   - Should decrease as policy becomes more deterministic
+
+3. **`train/policy_gradient_loss`**: Policy loss
+   - Oscillations are normal
+   - Divergence indicates instability
+
+4. **`train/value_loss`**: Critic loss
+   - Should decrease and stabilize
+
+5. **`rollout/ep_len_mean`**: Episode length
+   - Increasing length = robot survives longer
+   - Max length = `max_episode_steps`
+
+<Note>
+If `ep_len_mean` stays near maximum, the robot is not falling. If it's very short, check termination conditions.
+</Note>
+
+</Accordion>
+
+### Debugging Reward Functions
+
+<Accordion title="Log Reward Components">
+
+The environment returns detailed reward breakdowns:
+
+```python
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+
+env = AdaptiveGaitEnv("model/world_train.xml")
+obs, info = env.reset()
+
+for step in range(100):
+    action = env.action_space.sample()  # Random action
+    obs, reward, terminated, truncated, info = env.step(action)
+    
+    # Extract reward components
+    components = info["reward_components"]
+    print(f"Step {step:3d} | Total: {reward:7.2f} | "
+          f"Fwd vel: {components['forward_velocity']:7.2f} | "
+          f"Lat pen: {components['lateral_velocity_penalty']:7.2f} | "
+          f"Contact: {components['contact_pattern']:7.2f} | "
+          f"Stab: {components['stability']:7.2f}")
+    
+    if terminated or truncated:
+        obs, info = env.reset()
+```
+
+**Expected Behavior**:
+- `forward_velocity`: Dominates reward (largest magnitude)
+- `lateral_velocity_penalty`: Small negative value
+- `contact_pattern`: Positive when gait is correct
+- `stability`: Negative penalty for tilting
+
+See `~/workspace/source/envs/adaptive_gait_env.py:259` for reward implementation.
+
+</Accordion>
+
+<Accordion title="Compare Policy vs Baseline">
+
+**Script**: `~/workspace/source/debug_model.py`
+
+Compares trained policy against zero-residual baseline:
+
+```bash
+python3 debug_model.py runs/adaptive_gait_20251115_180640
+```
+
+**Output**:
+```
+======================================================================
+Debugging: adaptive_gait_20251115_180640
+======================================================================
+
+[Test 1] Training Gait (default parameters)
+----------------------------------------------------------------------
+Baseline (zero residuals):
+  Distance: 0.5063m
+  Mean velocity: 0.0304 m/s
+  Mean reward: 45.2314
+
+Trained model:
+  Distance: 3.1912m
+  Mean velocity: 0.1876 m/s
+  Mean reward: 312.4512
+  Mean action magnitude: 0.4521
+
+⚠ WARNING indicators:
+  - If velocity difference < -0.05: Policy learned to minimize residuals, not maximize velocity
+  - If action magnitude < 0.1: Policy barely modifies baseline
+  - If performance differs significantly between gaits: Train/eval gait mismatch
+```
+
+See `~/workspace/source/debug_model.py:1` for full script.
+
+</Accordion>
+
+### Observation Space Validation
+
+<Accordion title="Check Observation Statistics">
+
+```python
+import numpy as np
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+
+env = AdaptiveGaitEnv("model/world_train.xml")
+
+# Collect observations
+observations = []
+for episode in range(10):
+    obs, _ = env.reset()
+    observations.append(obs)
+    
+    for step in range(1000):
+        action = env.action_space.sample()
+        obs, _, terminated, truncated, _ = env.step(action)
+        observations.append(obs)
+        
+        if terminated or truncated:
+            break
+
+observations = np.array(observations)
+
+# Statistics
+print("Observation space statistics:")
+print(f"Shape: {observations.shape}")
+print(f"Mean: {observations.mean(axis=0)}")
+print(f"Std:  {observations.std(axis=0)}")
+print(f"Min:  {observations.min(axis=0)}")
+print(f"Max:  {observations.max(axis=0)}")
+
+# Check for problematic values
+if np.any(np.isnan(observations)):
+    print("⚠ NaN values detected!")
+if np.any(np.isinf(observations)):
+    print("⚠ Inf values detected!")
+if np.any(np.abs(observations) > 1e6):
+    print("⚠ Extremely large values detected!")
+```
+
+<Warning>
+If you see NaN or Inf values, check for:
+- Division by zero in reward computation
+- Unreachable IK solutions
+- Exploding velocities (check damping and friction)
+</Warning>
+
+</Accordion>
+
+### Action Distribution Analysis
+
+<Accordion title="Visualize Policy Actions">
+
+```python
+import matplotlib.pyplot as plt
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+
+# Load trained model
+model = PPO.load("runs/adaptive_gait_*/final_model.zip")
+vec_env = DummyVecEnv([lambda: AdaptiveGaitEnv("model/world_train.xml")])
+vec_env = VecNormalize.load("runs/adaptive_gait_*/vec_normalize.pkl", vec_env)
+vec_env.training = False
+vec_env.norm_reward = False
+
+# Collect actions
+actions = []
+obs = vec_env.reset()
+for _ in range(500):
+    action, _ = model.predict(obs, deterministic=True)
+    actions.append(action[0])
+    obs, _, done, _ = vec_env.step(action)
+    if done[0]:
+        obs = vec_env.reset()
+
+actions = np.array(actions)
+
+# Plot distributions
+fig, axes = plt.subplots(4, 4, figsize=(12, 10))
+axes = axes.flatten()
+
+action_names = [
+    "Δstep_height", "Δstep_length", "Δcycle_time", "Δbody_height",
+    "FL_x", "FL_y", "FL_z", "FR_x", "FR_y", "FR_z",
+    "RL_x", "RL_y", "RL_z", "RR_x", "RR_y", "RR_z"
+]
+
+for i, (ax, name) in enumerate(zip(axes, action_names)):
+    ax.hist(actions[:, i], bins=30, alpha=0.7)
+    ax.set_title(name)
+    ax.axvline(0, color='r', linestyle='--', linewidth=1)
+
+plt.tight_layout()
+plt.savefig("action_distribution.png", dpi=150)
+print("Saved action_distribution.png")
+```
+
+**Interpretation**:
+- Actions centered at 0: Policy relies mostly on baseline
+- Wide distribution: Policy actively explores action space
+- Saturated at ±1: Actions hitting limits (may need to adjust scaling)
+
+</Accordion>
+
+## ROS2 Debugging
+
+### Node Diagnostics
+
+<Accordion title="Check Running Nodes and Topics">
+
+```bash
+# List all active nodes
+ros2 node list
+# Expected output:
+#   /robot_control_node  (from sim.py)
+#   /gui_ros_node        (from gui.py)
+
+# List all active topics
+ros2 topic list
+# Expected output:
+#   /robot_camera
+#   /body_state
+#   /movement_command
+#   /parameter_events
+#   /rosout
+
+# Check topic frequency
+ros2 topic hz /robot_camera
+# Expected: ~10 Hz
+
+# Check topic data type
+ros2 topic info /robot_camera
+# Expected: Type: sensor_msgs/msg/Image
+
+# Echo topic messages
+ros2 topic echo /movement_command
+# Expected: data: 0, 1, or 2
+```
+
+</Accordion>
+
+<Accordion title="Debug Camera Feed">
+
+If camera feed is not displaying:
+
+```bash
+# 1. Check if topic is publishing
+ros2 topic hz /robot_camera
+# Should show ~10 Hz
+
+# 2. Check message content
+ros2 topic echo /robot_camera --once
+# Should show image metadata (height: 480, width: 640, encoding: rgb8)
+
+# 3. Save image to file for inspection
+ros2 run image_view image_saver --ros-args -r image:=/robot_camera
+# Check saved image in current directory
+```
+
+**Common Issues**:
+- **No messages**: `sim.py` not running or camera rendering disabled
+- **Low frequency**: MuJoCo simulation running too slowly (reduce control rate)
+- **Black image**: Check camera position in `robot.xml`
+
+</Accordion>
+
+<Accordion title="Test Movement Commands">
+
+```bash
+# Manually publish movement commands
+ros2 topic pub /movement_command std_msgs/Int32 "data: 1" --once
+# Robot should start moving forward
+
+ros2 topic pub /movement_command std_msgs/Int32 "data: 0" --once
+# Robot should stop (freeze gait)
+
+ros2 topic pub /movement_command std_msgs/Int32 "data: 2" --once
+# Robot should move backward
+```
+
+**Verify Response**:
+```bash
+# Monitor body position
+ros2 topic echo /body_state
+# X coordinate should change when moving
+```
+
+</Accordion>
+
+<Accordion title="Service Call Debugging">
+
+```bash
+# List available services
+ros2 service list
+# Expected: /restart_simulation
+
+# Check service type
+ros2 service type /restart_simulation
+# Expected: std_srvs/srv/Trigger
+
+# Call restart service
+ros2 service call /restart_simulation std_srvs/srv/Trigger
+# Expected response:
+#   success: True
+#   message: 'Simulation restarted'
+```
+
+If service call fails:
+1. Check if `sim.py` is running
+2. Verify ROS2 environment is sourced: `source /opt/ros/jazzy/setup.bash`
+3. Check for error messages in `sim.py` terminal
+
+</Accordion>
+
+### Joystick Debugging
+
+<Accordion title="Test Joystick Input">
+
+**Check pygame joystick detection**:
+
+```python
+import pygame
+
+pygame.init()
+pygame.joystick.init()
+
+print(f"Number of joysticks: {pygame.joystick.get_count()}")
+
+if pygame.joystick.get_count() > 0:
+    joystick = pygame.joystick.Joystick(0)
+    joystick.init()
+    print(f"Joystick name: {joystick.get_name()}")
+    print(f"Number of axes: {joystick.get_numaxes()}")
+    print(f"Number of buttons: {joystick.get_numbuttons()}")
+    
+    # Test axis values
+    while True:
+        pygame.event.pump()
+        axis_0 = joystick.get_axis(0)  # Typically left stick X
+        axis_1 = joystick.get_axis(1)  # Typically left stick Y
+        print(f"\rAxis 0: {axis_0:+.2f} | Axis 1: {axis_1:+.2f}", end="")
+else:
+    print("No joystick detected!")
+```
+
+**Common Issues**:
+- No joystick detected: Check USB connection, try `ls /dev/input/js*`
+- Axes not responding: Check axis mapping in `gui/gui.py`
+- Buttons not working: Verify button indices with `pygame.joystick` API
+
+</Accordion>
+
+## Performance Profiling
+
+<Accordion title="Profile Simulation Speed">
+
+```python
+import time
+import mujoco
+
+model = mujoco.MjModel.from_xml_path("model/world_train.xml")
+data = mujoco.MjData(model)
+
+# Benchmark simulation steps
+num_steps = 10000
+start = time.time()
+for _ in range(num_steps):
+    mujoco.mj_step(model, data)
+elapsed = time.time() - start
+
+print(f"Simulated {num_steps} steps in {elapsed:.2f}s")
+print(f"Simulation speed: {num_steps / elapsed:.0f} steps/s")
+print(f"Realtime factor: {(num_steps * model.opt.timestep) / elapsed:.2f}x")
+
+# Expected: >1000 steps/s, realtime factor >2x
+```
+
+If simulation is slow:
+- Reduce number of contacts (simplify terrain)
+- Lower integrator accuracy: `model.opt.iterations = 1`
+- Use GPU rendering: `MUJOCO_GL=egl`
+
+</Accordion>
+
+<Accordion title="Profile Training Throughput">
+
+```python
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+import time
+
+def make_env():
+    return AdaptiveGaitEnv("model/world_train.xml")
+
+# Test DummyVecEnv
+env = DummyVecEnv([make_env for _ in range(8)])
+obs = env.reset()
+start = time.time()
+for _ in range(1000):
+    actions = env.action_space.sample()
+    obs, rewards, dones, infos = env.step(actions)
+elapsed = time.time() - start
+print(f"DummyVecEnv: {8000 / elapsed:.0f} steps/s")
+
+# Test SubprocVecEnv
+env = SubprocVecEnv([make_env for _ in range(8)], start_method="spawn")
+obs = env.reset()
+start = time.time()
+for _ in range(1000):
+    actions = env.action_space.sample()
+    obs, rewards, dones, infos = env.step(actions)
+elapsed = time.time() - start
+print(f"SubprocVecEnv: {8000 / elapsed:.0f} steps/s")
+
+# SubprocVecEnv should be faster on multi-core CPUs
+```
+
+</Accordion>
+
+## Common Issues and Solutions
+
+### Robot Falls Immediately
+
+<Accordion title="Checklist">
+
+1. **Check initial pose**: Verify keyframe in `robot.xml` has valid joint angles
+   ```xml
+   <keyframe>
+     <key name="initial" qpos="0 0 0.08 ..." />
+   </keyframe>
+   ```
+
+2. **Verify IK solutions**: Ensure gait targets are reachable
+   ```python
+   from ik import solve_leg_ik_3dof
+   target = [0, 0, -0.05]  # Current gait target
+   result = solve_leg_ik_3dof(target)
+   assert result is not None, "Target unreachable!"
+   ```
+
+3. **Check settle steps**: Environment may need initialization time
+   ```python
+   env = AdaptiveGaitEnv(settle_steps=100)  # Was 0
+   ```
+
+4. **Inspect contact forces**: Ensure feet are making ground contact
+   ```python
+   foot_contacts = env._get_foot_contact_forces()
+   print(foot_contacts)  # Should have at least 2 legs in contact
+   ```
+
+</Accordion>
+
+### Training Diverges
+
+<Accordion title="Checklist">
+
+1. **Reduce learning rate**:
+   ```python
+   model = PPO(..., learning_rate=1e-4)  # Was 3e-4
+   ```
+
+2. **Clip gradient norm**:
+   ```python
+   model = PPO(..., max_grad_norm=0.5)  # Was 1.0
+   ```
+
+3. **Increase batch size**:
+   ```python
+   model = PPO(..., batch_size=4096)  # Was 2048
+   ```
+
+4. **Check reward scaling**: Ensure reward components are balanced
+   ```python
+   # In envs/adaptive_gait_env.py:269
+   rewards["forward_velocity"] = 1000.0 * forward_vel  # Reduce from 2000.0
+   ```
+
+5. **Add reward clipping**:
+   ```python
+   vec_env = VecNormalize(env, clip_reward=5.0)  # Was 10.0
+   ```
+
+</Accordion>
+
+### Slow Training
+
+<Accordion title="Optimizations">
+
+1. **Use SubprocVecEnv**: Parallel environments on multi-core CPUs
+   ```python
+   from stable_baselines3.common.vec_env import SubprocVecEnv
+   env = SubprocVecEnv([make_env for _ in range(84)], start_method="spawn")
+   ```
+
+2. **Reduce episode length**:
+   ```python
+   env = AdaptiveGaitEnv(max_episode_steps=30000)  # Was 60000
+   ```
+
+3. **Use GPU**:
+   ```python
+   model = PPO(..., device="cuda")  # Was "cpu"
+   ```
+
+4. **Optimize network size**:
+   ```python
+   policy_kwargs = dict(net_arch=[256, 128])  # Was [512, 256, 128]
+   ```
+
+5. **Reduce checkpoint frequency**:
+   ```python
+   checkpoint_callback = CheckpointCallback(save_freq=1_000_000)  # Was 500_000
+   ```
+
+</Accordion>
+
+## Debugging Tools Summary
+
+<CardGroup cols={2}>
+  <Card title="MuJoCo Viewer" icon="eye">
+    Built-in visualization with contact forces, joint positions, and camera views
+  </Card>
+  <Card title="TensorBoard" icon="chart-line">
+    Monitor training metrics: rewards, losses, episode lengths
+  </Card>
+  <Card title="ROS2 CLI" icon="terminal">
+    Inspect topics, services, and nodes with `ros2` command-line tools
+  </Card>
+  <Card title="Python Debugger" icon="bug">
+    Use `pdb` or `ipdb` for interactive debugging: `import pdb; pdb.set_trace()`
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Custom Terrains" icon="mountain" href="/dev/custom-terrains">
+    Create custom heightfield terrains for testing
+  </Card>
+  <Card title="Extending Controllers" icon="code" href="/dev/extending-controllers">
+    Add new gait parameters or behaviors
+  </Card>
+</CardGroup>

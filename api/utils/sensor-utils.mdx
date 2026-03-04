@@ -1,0 +1,270 @@
+---
+title: Sensor Utilities
+description: Unified interface for reading MuJoCo robot sensors
+---
+
+## Overview
+
+The sensor utilities module provides a unified interface for reading sensor data from the MuJoCo simulation. The `SensorReader` class automatically builds a mapping of sensor names to their addresses and dimensions, offering convenient methods to retrieve commonly used state vectors.
+
+## SensorReader Class
+
+Unified interface for reading robot sensors from MuJoCo.
+
+```python
+class SensorReader:
+    def __init__(self, model: mujoco.MjModel, data: mujoco.MjData) -> None
+```
+
+### Constructor
+
+<ParamField path="model" type="mujoco.MjModel" required>
+  MuJoCo model object containing sensor definitions.
+</ParamField>
+
+<ParamField path="data" type="mujoco.MjData" required>
+  MuJoCo data object containing current sensor readings.
+</ParamField>
+
+### Usage Example
+
+```python
+import mujoco
+from source.utils.sensor_utils import SensorReader
+
+# Load model and create data
+model = mujoco.MjModel.from_xml_path("robot.xml")
+data = mujoco.MjData(model)
+
+# Create sensor reader
+sensor_reader = SensorReader(model, data)
+
+# Step simulation to populate sensor data
+mujoco.mj_step(model, data)
+
+# Read various sensor data
+body_state = sensor_reader.get_body_state()
+joint_states = sensor_reader.get_joint_states()
+foot_positions = sensor_reader.get_foot_positions()
+```
+
+## Methods
+
+### list_sensors()
+
+Returns a tuple of all available sensor names in the model.
+
+```python
+def list_sensors(self) -> Tuple[str, ...]
+```
+
+**Returns**: Tuple of sensor name strings.
+
+**Example**:
+```python
+sensors = sensor_reader.list_sensors()
+print(f"Available sensors: {sensors}")
+```
+
+### read_sensor()
+
+Reads raw data from a specific sensor by name.
+
+```python
+def read_sensor(self, name: str) -> np.ndarray
+```
+
+<ParamField path="name" type="str" required>
+  Sensor name as defined in the MuJoCo model XML.
+</ParamField>
+
+**Returns**: NumPy array containing the sensor reading.
+
+**Raises**: `ValueError` if sensor name not found.
+
+**Example**:
+```python
+# Read specific sensor
+fl_foot_pos = sensor_reader.read_sensor("FL_foot_pos")
+print(f"Front-left foot position: {fl_foot_pos}")  # [x, y, z] in meters
+```
+
+### get_body_state()
+
+Returns the complete body state including position, orientation, and velocities.
+
+```python
+def get_body_state(self) -> np.ndarray
+```
+
+**Returns**: 13-dimensional array: `[pos(3), quat(4), linvel(3), angvel(3)]`
+
+- `pos`: Position in world frame (meters)
+- `quat`: Orientation quaternion [w, x, y, z]
+- `linvel`: Linear velocity (m/s)
+- `angvel`: Angular velocity (rad/s)
+
+**Example**:
+```python
+state = sensor_reader.get_body_state()
+position = state[0:3]
+quaternion = state[3:7]
+linear_velocity = state[7:10]
+angular_velocity = state[10:13]
+
+print(f"Body height: {position[2]:.3f}m")
+```
+
+### get_body_quaternion()
+
+Returns the body orientation quaternion.
+
+```python
+def get_body_quaternion(self) -> np.ndarray
+```
+
+**Returns**: 4-dimensional array [w, x, y, z] in MuJoCo's quaternion convention.
+
+**Example**:
+```python
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+quat = sensor_reader.get_body_quaternion()
+# Convert to euler angles (roll, pitch, yaw)
+rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])  # Convert to scipy convention
+euler = rot.as_euler('xyz', degrees=True)
+print(f"Roll: {euler[0]:.1f}°, Pitch: {euler[1]:.1f}°, Yaw: {euler[2]:.1f}°")
+```
+
+### get_joint_states()
+
+Returns all joint positions and velocities for the quadruped.
+
+```python
+def get_joint_states(self) -> np.ndarray
+```
+
+**Returns**: 24-dimensional array containing:
+- First 12 elements: joint positions (radians)
+- Last 12 elements: joint velocities (rad/s)
+
+**Joint ordering** (per leg: tilt, shoulder_L, shoulder_R):
+- Indices 0-2: FL (Front Left)
+- Indices 3-5: FR (Front Right)
+- Indices 6-8: RL (Rear Left)
+- Indices 9-11: RR (Rear Right)
+
+**Example**:
+```python
+joint_states = sensor_reader.get_joint_states()
+positions = joint_states[0:12]
+velocities = joint_states[12:24]
+
+# Extract front-left leg joints
+fl_tilt = positions[0]
+fl_shoulder_l = positions[1]
+fl_shoulder_r = positions[2]
+
+print(f"FL tilt: {np.degrees(fl_tilt):.1f}°")
+print(f"FL shoulder L: {np.degrees(fl_shoulder_l):.1f}°")
+print(f"FL shoulder R: {np.degrees(fl_shoulder_r):.1f}°")
+```
+
+### get_foot_positions()
+
+Returns positions of all four feet in world frame.
+
+```python
+def get_foot_positions(self) -> np.ndarray
+```
+
+**Returns**: 12-dimensional array: `[FL_pos(3), FR_pos(3), RL_pos(3), RR_pos(3)]` in meters.
+
+**Example**:
+```python
+foot_positions = sensor_reader.get_foot_positions()
+
+# Extract individual foot positions
+fl_pos = foot_positions[0:3]   # Front Left
+fr_pos = foot_positions[3:6]   # Front Right
+rl_pos = foot_positions[6:9]   # Rear Left
+rr_pos = foot_positions[9:12]  # Rear Right
+
+print(f"FL foot height: {fl_pos[2]:.3f}m")
+```
+
+### get_foot_velocities()
+
+Returns linear velocities of all four feet in world frame.
+
+```python
+def get_foot_velocities(self) -> np.ndarray
+```
+
+**Returns**: 12-dimensional array: `[FL_vel(3), FR_vel(3), RL_vel(3), RR_vel(3)]` in m/s.
+
+**Example**:
+```python
+foot_velocities = sensor_reader.get_foot_velocities()
+
+# Check if feet are in contact (low vertical velocity)
+for i, leg in enumerate(["FL", "FR", "RL", "RR"]):
+    vel = foot_velocities[i*3:(i+1)*3]
+    speed = np.linalg.norm(vel)
+    print(f"{leg} foot speed: {speed:.3f} m/s")
+```
+
+## Coordinate Frames and Units
+
+All sensor readings follow MuJoCo conventions:
+
+- **Positions**: Meters in world frame
+- **Quaternions**: [w, x, y, z] format
+- **Linear velocities**: m/s in world frame
+- **Angular velocities**: rad/s in world frame
+- **Joint angles**: Radians
+- **Joint velocities**: rad/s
+
+## Complete Example
+
+```python
+import mujoco
+import numpy as np
+from source.utils.sensor_utils import SensorReader
+
+# Initialize simulation
+model = mujoco.MjModel.from_xml_path("robot.xml")
+data = mujoco.MjData(model)
+sensor_reader = SensorReader(model, data)
+
+# Simulation loop
+for step in range(1000):
+    mujoco.mj_step(model, data)
+    
+    if step % 100 == 0:
+        # Read all state information
+        body_state = sensor_reader.get_body_state()
+        joint_states = sensor_reader.get_joint_states()
+        foot_positions = sensor_reader.get_foot_positions()
+        foot_velocities = sensor_reader.get_foot_velocities()
+        
+        # Extract specific information
+        body_height = body_state[2]
+        body_linvel = body_state[7:10]
+        
+        print(f"Step {step}:")
+        print(f"  Body height: {body_height:.3f}m")
+        print(f"  Forward velocity: {body_linvel[0]:.3f}m/s")
+        print(f"  Avg foot height: {np.mean(foot_positions[2::3]):.3f}m")
+```
+
+## Notes
+
+<Note>
+  The `SensorReader` builds its internal mapping during initialization. If the model is modified after creation, create a new `SensorReader` instance.
+</Note>
+
+<Warning>
+  Sensor data is only valid after at least one simulation step. Reading sensors immediately after model creation may return zero or uninitialized values.
+</Warning>

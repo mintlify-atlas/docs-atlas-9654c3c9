@@ -1,0 +1,545 @@
+---
+title: 'Baseline vs Adaptive Comparison'
+description: 'Quantitatively compare pure gait controller vs trained RL policy'
+---
+
+## Overview
+
+The `tests/compare_baseline_adaptive.py` script provides automated performance comparison between:
+1. **Step 1**: Baseline gait on flat terrain (upper bound)
+2. **Step 2**: Baseline gait on rough terrain (performance degradation)
+3. **Step 3**: Adaptive RL policy on rough terrain (learned recovery)
+
+This three-way comparison visualizes how much performance degrades on rough terrain and how much the trained policy recovers.
+
+## Quick Start
+
+<Steps>
+  <Step title="Ensure Model is Trained">
+    You need a trained model from the [Training Models](./training-models) guide:
+    ```bash
+    ls runs/adaptive_gait_*/final_model.zip
+    ```
+    
+    Should show your trained model file.
+  </Step>
+
+  <Step title="Run Comparison Script">
+    Execute the three-simulation comparison:
+    ```bash
+    cd ~/workspace/source
+    python3 tests/compare_baseline_adaptive.py \
+        --model runs/adaptive_gait_20260304_143022/final_model.zip \
+        --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+        --seconds 17
+    ```
+    
+    Replace `20260304_143022` with your actual training run timestamp.
+  </Step>
+
+  <Step title="Watch Simulations">
+    Three MuJoCo viewer windows will open sequentially:
+    1. **Step 1**: Baseline on flat terrain (smooth walking)
+    2. **Step 2**: Baseline on rough terrain (struggling)
+    3. **Step 3**: Adaptive policy on rough terrain (adapted walking)
+    
+    Each runs for 17 seconds by default.
+  </Step>
+
+  <Step title="View Results">
+    After all simulations complete:
+    - Comparison plot opens automatically
+    - Summary statistics printed to console
+    - Files saved in `tests/` directory
+  </Step>
+</Steps>
+
+## Command-Line Options
+
+```bash
+python3 tests/compare_baseline_adaptive.py \
+    --model <path_to_model.zip> \
+    --normalize <path_to_vec_normalize.pkl> \
+    --seconds <duration> \
+    --output <plot_path>
+```
+
+<ParamField path="--model" type="string" required>
+  Path to trained PPO model (`.zip` file)
+  
+  Example: `runs/adaptive_gait_20260304_143022/final_model.zip`
+</ParamField>
+
+<ParamField path="--normalize" type="string" required>
+  Path to VecNormalize statistics (`.pkl` file)
+  
+  Example: `runs/adaptive_gait_20260304_143022/vec_normalize.pkl`
+</ParamField>
+
+<ParamField path="--seconds" type="float" default="17.0">
+  Duration for each simulation in seconds
+  
+  - Longer runs = more stable statistics
+  - Shorter runs = faster iteration
+  - Recommended: 15-20 seconds
+</ParamField>
+
+<ParamField path="--output" type="string" default="tests/baseline_vs_adaptive_comparison.png">
+  Output path for the comparison plot
+  
+  Format: PNG image (150 DPI)
+</ParamField>
+
+## Understanding the Output
+
+### Three-Panel Plot
+
+The script generates a side-by-side comparison:
+
+<Tabs>
+  <Tab title="Step 1: Baseline (Flat)">
+    **Left Panel** - Reference Performance
+    
+    Shows baseline gait controller on ideal terrain:
+    - Smooth, linear progression
+    - Consistent forward velocity
+    - No obstacles or disturbances
+    
+    **Use**: Upper bound for performance
+    
+    **Color**: Blue line
+    
+    **Stats Box**:
+    ```
+    Distance: 1.234m
+    Avg Vel: 0.073m/s
+    ```
+  </Tab>
+  
+  <Tab title="Step 2: Baseline (Rough)">
+    **Middle Panel** - Performance Degradation
+    
+    Shows baseline gait controller on challenging terrain:
+    - Irregular progression (obstacles)
+    - Reduced forward velocity
+    - Possible backwards motion (falling)
+    
+    **Use**: Demonstrates need for adaptation
+    
+    **Color**: Red line
+    
+    **Stats Box**:
+    ```
+    Distance: 0.456m
+    Avg Vel: 0.027m/s
+    vs Flat: -63.1%
+    ```
+    
+    <Warning>
+      Negative percentage indicates performance degradation on rough terrain.
+    </Warning>
+  </Tab>
+  
+  <Tab title="Step 3: Adaptive (Rough)">
+    **Right Panel** - Learned Recovery
+    
+    Shows trained RL policy on challenging terrain:
+    - More stable than baseline on rough terrain
+    - Higher forward velocity than Step 2
+    - Adapted gait parameters + residuals
+    
+    **Use**: Demonstrates learning effectiveness
+    
+    **Color**: Green line
+    
+    **Stats Box**:
+    ```
+    Distance: 1.102m
+    Avg Vel: 0.065m/s
+    vs Step2: +141.7%
+    ```
+    
+    <Check>
+      Positive percentage indicates improvement over baseline on rough terrain.
+    </Check>
+  </Tab>
+</Tabs>
+
+### Console Summary
+
+After simulations complete, you'll see:
+
+```
+===============================================================================================
+COMPARISON SUMMARY - THREE SIMULATIONS
+===============================================================================================
+
+Metric                         Step 1: Baseline     Step 2: Baseline     Step 3: Adaptive    
+                               (Flat)               (Rough)              (Rough)             
+-----------------------------------------------------------------------------------------------
+Duration (s)                   17.00                17.00                17.00               
+Data points                    170                  170                  170                 
+Start X (m)                    0.000                0.000                0.000               
+End X (m)                      1.234                0.456                1.102               
+Distance traveled (m)          1.234                0.456                1.102               
+Average velocity (m/s)         0.073                0.027                0.065               
+
+Performance Comparison:
+  Step 2 vs Step 1 (Rough vs Flat):      -63.1%
+  Step 3 vs Step 2 (Adaptive vs Rough):  +141.7%
+===============================================================================================
+```
+
+### Interpreting Results
+
+<AccordionGroup>
+  <Accordion title="Good Learning Outcome">
+    **Indicators**:
+    - Step 2 (Baseline Rough) shows significant degradation: -40% to -80%
+    - Step 3 (Adaptive Rough) shows large improvement over Step 2: +50% to +200%
+    - Step 3 approaches Step 1 performance: within 10-20% of flat terrain baseline
+    
+    **Example**:
+    ```
+    Step 1 (Flat):  1.200m @ 0.071m/s
+    Step 2 (Rough): 0.400m @ 0.024m/s  [-66.7%]
+    Step 3 (Adapt): 1.050m @ 0.062m/s  [+162.5%]
+    ```
+    
+    ✅ Policy successfully learned terrain adaptation
+  </Accordion>
+  
+  <Accordion title="Marginal Learning">
+    **Indicators**:
+    - Step 3 shows small improvement over Step 2: +10% to +30%
+    - Still significantly below Step 1 performance: -30% to -50%
+    
+    **Example**:
+    ```
+    Step 1 (Flat):  1.200m @ 0.071m/s
+    Step 2 (Rough): 0.500m @ 0.029m/s  [-58.3%]
+    Step 3 (Adapt): 0.650m @ 0.038m/s  [+30.0%]
+    ```
+    
+    ⚠️ Policy learned some adaptation but not enough
+    
+    **Solutions**:
+    - Train longer (increase `total_timesteps`)
+    - Tune reward function
+    - Increase network size
+    - Adjust hyperparameters
+  </Accordion>
+  
+  <Accordion title="No Learning / Regression">
+    **Indicators**:
+    - Step 3 similar to or worse than Step 2: -10% to +5%
+    - Far below Step 1 performance
+    
+    **Example**:
+    ```
+    Step 1 (Flat):  1.200m @ 0.071m/s
+    Step 2 (Rough): 0.450m @ 0.026m/s  [-62.5%]
+    Step 3 (Adapt): 0.430m @ 0.025m/s  [-4.4%]
+    ```
+    
+    ❌ Policy did not learn effectively
+    
+    **Likely Causes**:
+    - Training diverged or plateaued early
+    - Learning rate too high
+    - Observation space issues
+    - Reward function not aligned with task
+    
+    **Action**: Review TensorBoard metrics, retrain with adjusted config
+  </Accordion>
+</AccordionGroup>
+
+## Saved Files
+
+The script saves several files in the `tests/` directory:
+
+<CodeGroup>
+  ```bash Trajectory Data (JSON)
+  tests/trajectory_step1_baseline_flat.json
+  tests/trajectory_step2_baseline_rough.json
+  tests/trajectory_step3_adaptive_rough.json
+  ```
+  
+  ```json JSON Format
+  {
+    "duration": 17.0,
+    "data_points": 170,
+    "terrain": "flat",
+    "mode": "baseline",
+    "trajectory": [
+      {"time": 0.0, "x": 0.000, "y": 0.000, "z": 0.050},
+      {"time": 0.1, "x": 0.007, "y": 0.001, "z": 0.049},
+      ...
+    ]
+  }
+  ```
+  
+  ```bash Comparison Plot (PNG)
+  tests/baseline_vs_adaptive_comparison.png
+  ```
+</CodeGroup>
+
+### Trajectory Data Format
+
+Each JSON file contains:
+
+<ResponseField name="duration" type="float">
+  Total simulation time in seconds
+</ResponseField>
+
+<ResponseField name="data_points" type="integer">
+  Number of recorded positions
+</ResponseField>
+
+<ResponseField name="terrain" type="string">
+  Terrain type: `"flat"` or `"rough"`
+</ResponseField>
+
+<ResponseField name="mode" type="string">
+  Control mode: `"baseline"` or `"adaptive"`
+</ResponseField>
+
+<ResponseField name="trajectory" type="array">
+  Array of position records:
+  - `time`: Simulation time (seconds)
+  - `x`, `y`, `z`: Robot body position (meters)
+</ResponseField>
+
+## Advanced Usage
+
+### Comparing Multiple Checkpoints
+
+Test different training checkpoints:
+
+```bash
+# Test checkpoint at 5M steps
+python3 tests/compare_baseline_adaptive.py \
+    --model runs/adaptive_gait_20260304_143022/checkpoints/rl_model_5000000_steps.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 17 \
+    --output tests/comparison_5M.png
+
+# Test final model at 30M steps
+python3 tests/compare_baseline_adaptive.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 17 \
+    --output tests/comparison_30M.png
+```
+
+Compare the plots to see learning progression.
+
+### Longer Evaluation Runs
+
+For more stable statistics:
+
+```bash
+python3 tests/compare_baseline_adaptive.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 60 \
+    --output tests/comparison_60s.png
+```
+
+Longer runs reduce variance but take more time.
+
+### Batch Comparison Script
+
+Compare all checkpoints automatically:
+
+```bash batch_compare.sh
+#!/bin/bash
+
+RUN_DIR="runs/adaptive_gait_20260304_143022"
+OUTPUT_DIR="tests/checkpoint_comparison"
+mkdir -p "$OUTPUT_DIR"
+
+for MODEL in "$RUN_DIR"/checkpoints/rl_model_*_steps.zip; do
+    STEP=$(basename "$MODEL" | grep -oP '\d+(?=_steps)')
+    echo "Testing checkpoint: $STEP steps"
+    
+    python3 tests/compare_baseline_adaptive.py \
+        --model "$MODEL" \
+        --normalize "$RUN_DIR/vec_normalize.pkl" \
+        --seconds 17 \
+        --output "$OUTPUT_DIR/comparison_${STEP}.png"
+done
+
+echo "All comparisons complete in $OUTPUT_DIR/"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Simulation Crashes or Exits Early">
+    **Symptoms**: MuJoCo viewer closes before 17 seconds
+    
+    **Causes**:
+    - Robot fell and simulation terminated
+    - Episode length limit reached
+    - Model NaN values (diverged training)
+    
+    **Solutions**:
+    1. Check training metrics for divergence
+    2. Try an earlier checkpoint
+    3. Reduce simulation duration (`--seconds 10`)
+    4. Review model loading errors in console
+  </Accordion>
+  
+  <Accordion title="FileNotFoundError for Model">
+    **Error**: `FileNotFoundError: [Errno 2] No such file or directory: 'runs/.../final_model.zip'`
+    
+    **Solutions**:
+    1. List available runs:
+       ```bash
+       ls -lh runs/
+       ```
+    2. Use correct timestamp in path
+    3. Ensure training completed successfully
+    4. Check for `final_model.zip` in run directory:
+       ```bash
+       ls -lh runs/adaptive_gait_*/
+       ```
+  </Accordion>
+  
+  <Accordion title="Plot Looks Strange">
+    **Symptoms**: Backwards motion, flat lines, extreme values
+    
+    **Interpretations**:
+    - **Backwards motion**: Robot is falling/flipping
+    - **Flat line**: Robot stuck or not moving
+    - **Extreme jumps**: Simulation instability
+    
+    **Debugging**:
+    1. Watch the MuJoCo viewer during runs
+    2. Check trajectory JSON files manually
+    3. Run each simulation individually:
+       ```bash
+       python3 play_adaptive_policy.py --baseline --flat --seconds 17
+       python3 play_adaptive_policy.py --baseline --seconds 17
+       python3 play_adaptive_policy.py --model ... --normalize ... --seconds 17
+       ```
+  </Accordion>
+  
+  <Accordion title="Adaptive Worse Than Baseline">
+    **Symptoms**: Step 3 shows negative improvement vs Step 2
+    
+    **This indicates training failed**. Check:
+    
+    1. TensorBoard metrics:
+       ```bash
+       tensorboard --logdir runs/
+       ```
+       - Did reward increase?
+       - Did episode length increase?
+       - When did training plateau?
+    
+    2. Try an earlier checkpoint (may have diverged)
+    
+    3. Retrain with adjusted hyperparameters:
+       - Lower learning rate: `3e-4` → `1e-4`
+       - Increase entropy coefficient: `0.01` → `0.05`
+       - More environments: `84` → `128`
+  </Accordion>
+</AccordionGroup>
+
+## Implementation Details
+
+### How It Works
+
+The comparison script (`tests/compare_baseline_adaptive.py`):
+
+<Steps>
+  <Step title="Run Simulation 1">
+    ```python
+    run_simulation(
+        baseline=True,
+        flat_terrain=True,
+        duration=17.0,
+        output_file="tests/trajectory_step1_baseline_flat.json"
+    )
+    ```
+    
+    Calls `play_adaptive_policy.py` with `--baseline --flat` flags.
+  </Step>
+  
+  <Step title="Run Simulation 2">
+    ```python
+    run_simulation(
+        baseline=True,
+        flat_terrain=False,
+        duration=17.0,
+        output_file="tests/trajectory_step2_baseline_rough.json"
+    )
+    ```
+    
+    Calls `play_adaptive_policy.py` with `--baseline` flag only.
+  </Step>
+  
+  <Step title="Run Simulation 3">
+    ```python
+    run_simulation(
+        baseline=False,
+        model_path="runs/.../final_model.zip",
+        normalize_path="runs/.../vec_normalize.pkl",
+        duration=17.0,
+        output_file="tests/trajectory_step3_adaptive_rough.json"
+    )
+    ```
+    
+    Calls `play_adaptive_policy.py` with `--model` and `--normalize` flags.
+  </Step>
+  
+  <Step title="Generate Plot">
+    ```python
+    plot_comparison(
+        baseline_flat_data,
+        baseline_rough_data,
+        adaptive_rough_data,
+        output_file="tests/baseline_vs_adaptive_comparison.png"
+    )
+    ```
+    
+    Creates three-panel matplotlib figure with statistics.
+  </Step>
+</Steps>
+
+### Trajectory Recording
+
+The `play_adaptive_policy.py` script records trajectory when `--save-trajectory` is provided:
+
+```python
+# Every 0.1 seconds
+trajectory_data.append({
+    "time": data.time,
+    "x": robot_pos[0],
+    "y": robot_pos[1],
+    "z": robot_pos[2]
+})
+
+# At end of simulation
+with open(output_file, 'w') as f:
+    json.dump({
+        "duration": duration,
+        "data_points": len(trajectory_data),
+        "terrain": terrain_type,
+        "mode": mode,
+        "trajectory": trajectory_data
+    }, f, indent=2)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Retrain with Tuning" icon="sliders" href="./training-models">
+    Adjust hyperparameters based on comparison results
+  </Card>
+  <Card title="Deploy Best Model" icon="rocket" href="./ros2-integration">
+    Use the best-performing checkpoint in ROS2 setup
+  </Card>
+</CardGroup>

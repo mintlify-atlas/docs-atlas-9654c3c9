@@ -1,80 +1,358 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get your first simulation running and see adaptive control in action in ~10 minutes
 ---
 
-## Get started in three steps
+## Goal
 
-Get your documentation site running locally and make your first customization.
+In this guide, you'll run the main comparison test that demonstrates the power of adaptive RL control. You'll see three simulations side-by-side showing how the robot performs:
 
-### Step 1: Set up your local environment
+1. **Baseline on flat terrain** - establishes ideal performance
+2. **Baseline on rough terrain** - shows degradation without adaptation  
+3. **Adaptive RL on rough terrain** - demonstrates learned improvements
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Info>
+  **Time required**: ~10 minutes (includes 3 × 17-second simulations + setup)
+</Info>
 
-### Step 2: Deploy your changes
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Before starting, make sure you've completed the [installation guide](/installation). You'll need:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+- ROS2 Jazzy installed and sourced
+- Python dependencies from `requirements.txt`
+- The source code cloned to your machine
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+## Step 1: Source ROS2 Environment
 
-### Step 3: Go live
+Every time you work with the robot, start by sourcing ROS2:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+```bash
+source /opt/ros/jazzy/setup.bash
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  Add this line to your `~/.bashrc` to automatically source ROS2 in every terminal session.
 </Note>
+
+## Step 2: Navigate to Project Directory
+
+```bash
+cd path/to/walk2
+```
+
+Verify you're in the right place:
+
+```bash
+ls -1
+```
+
+You should see directories like `model/`, `controllers/`, `envs/`, `tests/`, etc.
+
+## Step 3: Run the Comparison Test
+
+Execute the main comparison script with the pre-trained model:
+
+```bash
+python3 tests/compare_baseline_adaptive.py \
+    --model runs/adaptive_gait_20251115_180640/final_model.zip \
+    --normalize runs/adaptive_gait_20251115_180640/vec_normalize.pkl \
+    --seconds 17
+```
+
+<Accordion title="What do these arguments mean?">
+  - `--model`: Path to the trained PPO policy network (.zip file)
+  - `--normalize`: Path to observation normalization statistics (.pkl file)
+  - `--seconds`: Duration of each simulation (17 seconds gives clear results)
+</Accordion>
+
+## Step 4: Watch the Simulations
+
+The script will run three simulations automatically:
+
+<Steps>
+  <Step title="Step 1: Baseline (Flat)">
+    A MuJoCo viewer window opens showing the robot on flat terrain. The baseline gait controller moves the robot forward steadily. This simulation lasts 17 seconds.
+    
+    **Expected**: Smooth forward progression (~0.5m traveled)
+  </Step>
+  
+  <Step title="Step 2: Baseline (Rough)">
+    The window closes and reopens with rough terrain. Same controller, but now the irregular ground disrupts the gait.
+    
+    **Expected**: Slower, less efficient movement (~0.3m traveled, 41% degradation)
+  </Step>
+  
+  <Step title="Step 3: Adaptive RL (Rough)">
+    Same rough terrain, but now with the RL policy adding corrections. Watch how the robot adjusts its gait dynamically.
+    
+    **Expected**: Much better performance (~3.2m traveled, 967% improvement!)
+  </Step>
+</Steps>
+
+<Warning>
+  Each simulation runs in fullscreen mode. Press `ESC` to exit early if needed, but note that this will abort the comparison.
+</Warning>
+
+## Step 5: Review the Results
+
+After all three simulations complete, you'll see:
+
+### Terminal Output
+
+A summary table with detailed metrics:
+
+```
+===============================================================================================
+COMPARISON SUMMARY - THREE SIMULATIONS
+===============================================================================================
+
+Metric                         Step 1: Baseline     Step 2: Baseline     Step 3: Adaptive    
+                               (Flat)               (Rough)              (Rough)             
+-----------------------------------------------------------------------------------------------
+Duration (s)                   17.00                17.00                17.00               
+Data points                    9069                 8966                 7128                
+Start X (m)                    0.000                0.000                0.000               
+End X (m)                      0.506                0.299                3.191               
+Distance traveled (m)          0.506                0.299                3.191               
+Average velocity (m/s)         0.030                0.018                0.188               
+
+Performance Comparison:
+  Step 2 vs Step 1 (Rough vs Flat):      -40.9%
+  Step 3 vs Step 2 (Adaptive vs Rough):  +967.2%
+===============================================================================================
+```
+
+### Comparison Plot
+
+A three-panel visualization saved to `tests/baseline_vs_adaptive_comparison.png`.
+
+Each panel shows:
+- Time vs X position trajectory
+- Start (green) and end (red) markers
+- Distance traveled and average velocity
+- Percentage improvement/degradation
+
+### Trajectory Data
+
+Three JSON files with complete trajectory data:
+
+```bash
+tests/trajectory_step1_baseline_flat.json
+tests/trajectory_step2_baseline_rough.json  
+tests/trajectory_step3_adaptive_rough.json
+```
+
+Each file contains timestamped position data:
+
+```json
+{
+  "duration": 17.0,
+  "terrain": "rough",
+  "mode": "adaptive",
+  "trajectory": [
+    {"time": 0.000, "x": 0.000, "y": 0.000, "z": 0.091},
+    {"time": 0.002, "x": 0.001, "y": 0.000, "z": 0.091},
+    ...
+  ]
+}
+```
+
+## Understanding the Results
+
+### Why Does Baseline Degrade on Rough Terrain?
+
+The baseline controller uses **open-loop gait generation**:
+
+```python
+# From gait_controller.py
+GAIT_PARAMS = GaitParameters(
+    body_height=0.05,
+    step_length=0.06, 
+    step_height=0.04,
+    cycle_time=0.8
+)
+```
+
+These fixed parameters work well on flat ground but fail to adapt when:
+- Ground height varies unexpectedly
+- Contact timing differs from predictions
+- Body orientation changes due to terrain
+
+### How Does Adaptive Control Help?
+
+The RL policy learns to add **residual corrections** that compensate for terrain:
+
+```python
+# From adaptive_gait_controller.py
+class AdaptiveGaitController:
+    def update(self, timestep: float, rl_action: np.ndarray) -> Dict[str, np.ndarray]:
+        # Get baseline targets
+        base_targets = self.base_controller.update(timestep)
+        
+        # Add learned residuals
+        for leg in LEG_NAMES:
+            base_targets[leg] += rl_action[leg] * self.residual_scale
+        
+        return base_targets
+```
+
+The policy observes:
+- Body position, velocity, and orientation
+- Joint angles and velocities
+- Contact states for each foot
+- Recent command history
+
+And learns to predict optimal corrections through trial and error during training.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Run Standalone Simulation" icon="play">
+    Try a simpler simulation without the comparison framework:
+    
+    ```bash
+    python3 height_control.py
+    ```
+    
+    Press `Space` to pause/resume.
+  </Card>
+  
+  <Card title="Try GUI with Joystick" icon="gamepad">
+    Run the full ROS2 stack with GUI control:
+    
+    **Terminal 1:**
+    ```bash
+    cd gui && python3 gui.py
+    ```
+    
+    **Terminal 2:**
+    ```bash
+    python3 sim.py --terrain rough
+    ```
+  </Card>
+  
+  <Card title="Train Your Own Model" icon="brain">
+    Train a new adaptive policy from scratch:
+    
+    ```bash
+    bash train_quick.sh
+    ```
+    
+    Takes ~1.5 hours with 12 CPU cores.
+  </Card>
+  
+  <Card title="Explore the Code" icon="code">
+    Dive into the implementation:
+    
+    - `gait_controller.py` - Baseline diagonal gait
+    - `controllers/adaptive_gait_controller.py` - RL wrapper
+    - `envs/adaptive_gait_env.py` - Training environment
+    - `utils/ik.py` - Inverse kinematics solver
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: No module named 'mujoco'">
+    You need to install Python dependencies:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: Model file not found">
+    Make sure you're running the script from the project root directory (`walk2/`), not from inside `tests/`.
+    
+    The pre-trained model should exist at:
+    ```
+    runs/adaptive_gait_20251115_180640/final_model.zip
+    ```
+  </Accordion>
+  
+  <Accordion title="Simulation runs in headless mode (no window)">
+    Check your `MUJOCO_GL` environment variable:
+    
+    ```bash
+    unset MUJOCO_GL
+    ```
+    
+    If running over SSH without X11 forwarding, MuJoCo will default to headless rendering.
+  </Accordion>
+  
+  <Accordion title="Robot falls over immediately">
+    This might indicate:
+    1. Wrong terrain file (check console output)
+    2. Incorrect IK parameters
+    3. Corrupted model checkpoint
+    
+    Try running just the baseline on flat terrain:
+    ```bash
+    python3 height_control.py --terrain flat
+    ```
+  </Accordion>
+  
+  <Accordion title="Performance is worse than expected">
+    Results can vary based on:
+    - Random terrain generation (each rough terrain is unique)
+    - Initial robot placement
+    - Simulation timestep accuracy
+    
+    Run the comparison multiple times to see typical ranges.
+  </Accordion>
+</AccordionGroup>
+
+## Visualization Tips
+
+### MuJoCo Viewer Controls
+
+While simulations are running:
+
+| Action | Control |
+|--------|--------|
+| **Rotate camera** | Right-click + drag |
+| **Pan camera** | Middle-click + drag |
+| **Zoom** | Scroll wheel |
+| **Pause** | Space bar |
+| **Reset view** | Double-click |
+| **Exit fullscreen** | ESC |
+
+### Analyzing Trajectories
+
+Load and plot trajectory data with Python:
+
+```python
+import json
+import matplotlib.pyplot as plt
+
+# Load trajectory
+with open('tests/trajectory_step3_adaptive_rough.json') as f:
+    data = json.load(f)
+
+# Extract time and position
+times = [p['time'] for p in data['trajectory']]
+x_pos = [p['x'] for p in data['trajectory']]
+
+# Plot
+plt.plot(times, x_pos)
+plt.xlabel('Time (s)')
+plt.ylabel('X Position (m)')
+plt.title(f"Adaptive RL on Rough Terrain")
+plt.show()
+```
+
+## Learn More
+
+<CardGroup cols={3}>
+  <Card title="MuJoCo Docs" icon="book" href="https://mujoco.readthedocs.io/">
+    Physics engine documentation
+  </Card>
+  <Card title="Stable Baselines 3" icon="book" href="https://stable-baselines3.readthedocs.io/">
+    RL training framework
+  </Card>
+  <Card title="ROS2 Jazzy" icon="book" href="https://docs.ros.org/en/jazzy/">
+    ROS2 distribution docs
+  </Card>
+</CardGroup>

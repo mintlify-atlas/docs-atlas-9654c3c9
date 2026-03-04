@@ -1,0 +1,226 @@
+---
+title: "train_adaptive_gait_ppo.py"
+description: "PPO training script for adaptive gait controller with terrain adaptation"
+---
+
+## Overview
+
+This script trains a reinforcement learning policy that learns to modulate gait parameters (step height, step length, cycle time, body height) in addition to residual joint corrections. This enables the quadruped robot to adapt to rough terrain by adjusting both high-level gait characteristics and low-level motor commands.
+
+**Key Features:**
+- 16D action space (4 gait parameter deltas + 12 joint residuals)
+- 69D observation space (includes current gait parameters)
+- PPO algorithm with parallel environment training
+- Automatic checkpointing and TensorBoard logging
+- VecNormalize for observation and reward normalization
+
+## Usage
+
+```bash
+python3 train_adaptive_gait_ppo.py
+```
+
+The script uses a hardcoded `TrainingConfig` dataclass. To modify training settings, edit the dataclass in the source file.
+
+## Training Configuration
+
+All training parameters are controlled via the `TrainingConfig` dataclass:
+
+### Duration Settings
+
+<ParamField path="total_timesteps" type="int" default="30000000">
+  Total number of environment steps to train for (30 million)
+</ParamField>
+
+### Parallelization Settings
+
+<ParamField path="n_envs" type="int" default="84">
+  Number of parallel environments for training. Higher values increase throughput but require more CPU cores and memory.
+</ParamField>
+
+<ParamField path="vec_env_backend" type="str" default="subproc">
+  Vectorized environment backend:
+  - `"subproc"`: Uses multiprocessing for true parallelism (recommended)
+  - `"dummy"`: Sequential execution for debugging
+</ParamField>
+
+### PPO Hyperparameters
+
+<ParamField path="n_steps" type="int" default="4096">
+  Number of steps to collect per environment before each policy update. Total rollout buffer size = `n_steps * n_envs`.
+</ParamField>
+
+<ParamField path="batch_size" type="int" default="2048">
+  Minibatch size for each gradient descent step during policy optimization.
+</ParamField>
+
+<ParamField path="learning_rate" type="float" default="0.0003">
+  Learning rate for the Adam optimizer (3e-4).
+</ParamField>
+
+<ParamField path="gamma" type="float" default="0.99">
+  Discount factor for future rewards.
+</ParamField>
+
+<ParamField path="gae_lambda" type="float" default="0.95">
+  Lambda parameter for Generalized Advantage Estimation (GAE).
+</ParamField>
+
+<ParamField path="n_epochs" type="int" default="10">
+  Number of epochs to train on each rollout buffer.
+</ParamField>
+
+<ParamField path="ent_coef" type="float" default="0.01">
+  Entropy coefficient for exploration bonus.
+</ParamField>
+
+<ParamField path="clip_range" type="float" default="0.2">
+  Clipping range for PPO objective (epsilon in the PPO paper).
+</ParamField>
+
+<ParamField path="max_grad_norm" type="float" default="1.0">
+  Maximum gradient norm for gradient clipping.
+</ParamField>
+
+### Network Architecture
+
+<ParamField path="network_size" type="str" default="large">
+  Neural network architecture size:
+  - `"small"`: [128, 64]
+  - `"medium"`: [256, 128, 64]
+  - `"large"`: [512, 256, 128]
+  
+  Both actor (policy) and critic (value function) use the same architecture.
+</ParamField>
+
+<ParamField path="residual_scale" type="float" default="0.01">
+  Scaling factor applied to residual joint corrections. Lower values make residuals more conservative.
+</ParamField>
+
+### Logging and Checkpointing
+
+<ParamField path="run_name" type="str" default="adaptive_gait">
+  Base name for the training run. Output directory will be `{run_name}_{timestamp}`.
+</ParamField>
+
+<ParamField path="log_root" type="str" default="runs">
+  Root directory for training outputs.
+</ParamField>
+
+<ParamField path="checkpoint_freq" type="int" default="500000">
+  Save checkpoint every N environment steps.
+</ParamField>
+
+### Miscellaneous
+
+<ParamField path="randomize" type="bool" default="false">
+  Enable domain randomization (not currently implemented in the environment).
+</ParamField>
+
+<ParamField path="device" type="str" default="auto">
+  PyTorch device:
+  - `"auto"`: Automatically select CUDA if available, otherwise CPU
+  - `"cpu"`: Force CPU
+  - `"cuda"`: Force CUDA
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for reproducibility. If `None`, uses system randomness.
+</ParamField>
+
+## Output Files
+
+Training artifacts are saved to `runs/{run_name}_{timestamp}/`:
+
+```
+runs/adaptive_gait_20260304_143022/
+├── config.txt                      # Training configuration
+├── final_model.zip                 # Final trained policy
+├── vec_normalize.pkl               # Normalization statistics
+├── checkpoints/                    # Periodic checkpoints
+│   ├── rl_model_500000_steps.zip
+│   ├── rl_model_1000000_steps.zip
+│   └── ...
+├── monitor_0.csv                   # Episode logs (env 0)
+├── monitor_1.csv                   # Episode logs (env 1)
+├── ...
+└── PPO_1/                          # TensorBoard logs
+    └── events.out.tfevents...
+```
+
+### Key Files
+
+- **`final_model.zip`**: Trained policy weights (actor + critic networks)
+- **`vec_normalize.pkl`**: Running mean/std statistics for observations and rewards. Required for evaluation.
+- **`checkpoints/`**: Intermediate models saved every `checkpoint_freq` steps
+- **`monitor_*.csv`**: Episode returns, lengths, and timestamps for each parallel environment
+- **`config.txt`**: Human-readable training configuration
+
+## Training Dynamics
+
+With default settings:
+- **Steps per iteration**: 344,064 (84 envs × 4,096 steps)
+- **Updates per iteration**: ~1,680 (10 epochs × 344,064 / 2,048 batch size)
+- **Total iterations**: ~87 (30M / 344,064)
+- **Checkpoint frequency**: Every 500k steps (~1.45 iterations)
+
+## Example: Monitoring Training
+
+### View TensorBoard Logs
+
+```bash
+tensorboard --logdir runs/adaptive_gait_20260304_143022/
+```
+
+Key metrics to monitor:
+- `rollout/ep_rew_mean`: Average episode reward
+- `train/policy_loss`: Policy gradient loss
+- `train/value_loss`: Critic (value function) loss
+- `train/entropy_loss`: Policy entropy (exploration)
+
+### Analyze Monitor Logs
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Load episode logs from first environment
+df = pd.read_csv('runs/adaptive_gait_20260304_143022/monitor_0.csv', skiprows=1)
+
+# Plot episode rewards over time
+plt.plot(df['t'], df['r'])
+plt.xlabel('Wall-clock time (seconds)')
+plt.ylabel('Episode return')
+plt.show()
+```
+
+## Expected Behavior
+
+A well-trained adaptive gait policy should:
+- **Increase step height** on rough terrain to avoid stumbling
+- **Adjust step length** to balance speed vs. stability
+- **Modulate cycle time** based on terrain difficulty (slower on rough terrain)
+- **Maintain appropriate body height** to avoid collisions
+
+## Differences from Residual-Only Training
+
+| Aspect | Adaptive Gait | Residual-Only |
+|--------|---------------|---------------|
+| Action space | 16D (4 params + 12 residuals) | 12D (residuals only) |
+| Observation space | 69D (includes gait params) | 65D |
+| Control level | High-level + low-level | Low-level only |
+| Terrain adaptation | Explicit gait modulation | Implicit via residuals |
+
+## Next Steps
+
+After training completes, evaluate the policy:
+
+```bash
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 30 \
+    --deterministic
+```
+
+See [play_adaptive_policy.py](/api/training/play-adaptive-policy) for evaluation options.

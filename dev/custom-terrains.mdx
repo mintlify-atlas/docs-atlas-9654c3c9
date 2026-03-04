@@ -1,0 +1,783 @@
+---
+title: Custom Terrains
+description: Generate custom MuJoCo heightfield terrains for quadruped robot testing
+---
+
+This guide explains how to create custom terrain heightfields for training and evaluating the quadruped robot.
+
+## MuJoCo Heightfield Basics
+
+### What is a Heightfield?
+
+A heightfield is a 2D grid where each cell contains a height value. MuJoCo uses heightfields to create realistic terrain with variable elevation.
+
+**Key Properties**:
+- **Resolution**: Number of grid cells (e.g., 256×256)
+- **Size**: Physical dimensions `[x_size, y_size, z_scale, z_offset]`
+  - `x_size`, `y_size`: Horizontal extent (meters)
+  - `z_scale`: Maximum height variation (meters)
+  - `z_offset`: Baseline elevation (meters)
+- **Data Format**: PNG grayscale image or binary `.bin` file
+
+### Current Terrain Configuration
+
+**File**: `~/workspace/source/model/world_train.xml`
+
+```xml
+<asset>
+  <hfield name="terrain" file="hfield.png" size="7.1 9.3 .025 0.1"/>
+</asset>
+
+<worldbody>
+  <geom name="terrain" type="hfield" hfield="terrain" material="groundplane"/>
+</worldbody>
+```
+
+**Parameters**:
+- Physical size: 7.1m × 9.3m
+- Height variation: ±0.025m (2.5cm)
+- Base height: 0.1m
+
+<Note>
+The heightfield must be in the same directory as `world_train.xml` or use an absolute path.
+</Note>
+
+## Generating Terrain Heightfields
+
+### Method 1: Perlin Noise Terrain
+
+<Accordion title="Install Dependencies">
+
+```bash
+pip install noise Pillow numpy matplotlib
+```
+
+</Accordion>
+
+<Accordion title="Python Script: Perlin Noise Generator">
+
+Create `generate_terrain.py`:
+
+```python
+#!/usr/bin/env python3
+"""Generate procedural terrain heightfields using Perlin noise."""
+
+import numpy as np
+from PIL import Image
+from noise import pnoise2
+import matplotlib.pyplot as plt
+
+def generate_perlin_terrain(
+    width=256,
+    height=256,
+    scale=50.0,
+    octaves=6,
+    persistence=0.5,
+    lacunarity=2.0,
+    seed=None
+):
+    """Generate Perlin noise terrain.
+    
+    Args:
+        width, height: Resolution in pixels
+        scale: Zoom level (larger = smoother)
+        octaves: Number of noise layers (more = more detail)
+        persistence: Amplitude decay per octave
+        lacunarity: Frequency increase per octave
+        seed: Random seed for reproducibility
+    
+    Returns:
+        numpy array of shape (height, width) with values in [0, 1]
+    """
+    if seed is not None:
+        np.random.seed(seed)
+        offset_x = np.random.randint(0, 10000)
+        offset_y = np.random.randint(0, 10000)
+    else:
+        offset_x = offset_y = 0
+    
+    terrain = np.zeros((height, width))
+    
+    for y in range(height):
+        for x in range(width):
+            noise_val = pnoise2(
+                (x + offset_x) / scale,
+                (y + offset_y) / scale,
+                octaves=octaves,
+                persistence=persistence,
+                lacunarity=lacunarity,
+                repeatx=width,
+                repeaty=height,
+                base=0
+            )
+            # Map from [-1, 1] to [0, 1]
+            terrain[y, x] = (noise_val + 1.0) / 2.0
+    
+    return terrain
+
+def save_heightfield(terrain, filename="hfield.png"):
+    """Save terrain as 8-bit grayscale PNG.
+    
+    Args:
+        terrain: 2D numpy array with values in [0, 1]
+        filename: Output filename
+    """
+    # Convert to 8-bit grayscale
+    terrain_8bit = (terrain * 255).astype(np.uint8)
+    img = Image.fromarray(terrain_8bit, mode='L')
+    img.save(filename)
+    print(f"Saved heightfield to {filename}")
+    print(f"Resolution: {terrain.shape[1]}x{terrain.shape[0]}")
+
+def preview_terrain(terrain, title="Terrain Preview"):
+    """Display terrain preview with matplotlib."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # 2D height map
+    im1 = ax1.imshow(terrain, cmap='terrain', origin='lower')
+    ax1.set_title('Top View')
+    ax1.set_xlabel('X (pixels)')
+    ax1.set_ylabel('Y (pixels)')
+    plt.colorbar(im1, ax=ax1, label='Normalized Height')
+    
+    # 3D surface plot
+    x = np.arange(terrain.shape[1])
+    y = np.arange(terrain.shape[0])
+    X, Y = np.meshgrid(x, y)
+    ax2 = fig.add_subplot(122, projection='3d')
+    ax2.plot_surface(X, Y, terrain, cmap='terrain', linewidth=0, antialiased=True)
+    ax2.set_title('3D View')
+    ax2.set_xlabel('X')
+    ax2.set_ylabel('Y')
+    ax2.set_zlabel('Height')
+    
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Generate Perlin noise terrain")
+    parser.add_argument("--width", type=int, default=256, help="Width in pixels")
+    parser.add_argument("--height", type=int, default=256, help="Height in pixels")
+    parser.add_argument("--scale", type=float, default=50.0, help="Noise scale (larger = smoother)")
+    parser.add_argument("--octaves", type=int, default=6, help="Number of noise octaves")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--output", type=str, default="hfield.png", help="Output filename")
+    parser.add_argument("--preview", action="store_true", help="Show preview before saving")
+    args = parser.parse_args()
+    
+    print("Generating terrain...")
+    terrain = generate_perlin_terrain(
+        width=args.width,
+        height=args.height,
+        scale=args.scale,
+        octaves=args.octaves,
+        seed=args.seed
+    )
+    
+    if args.preview:
+        preview_terrain(terrain)
+    
+    save_heightfield(terrain, args.output)
+    print(f"\nTo use in MuJoCo, add to world.xml:")
+    print(f'<hfield name="terrain" file="{args.output}" size="7.1 9.3 .025 0.1"/>')
+```
+
+**Usage**:
+```bash
+# Smooth rolling hills
+python3 generate_terrain.py --scale 80.0 --octaves 4 --output smooth_hills.png
+
+# Rough rocky terrain
+python3 generate_terrain.py --scale 30.0 --octaves 8 --output rocky.png
+
+# Gentle terrain (easier for robot)
+python3 generate_terrain.py --scale 100.0 --octaves 3 --output gentle.png
+
+# Preview before saving
+python3 generate_terrain.py --preview
+```
+
+</Accordion>
+
+### Method 2: Staircase Terrain
+
+<Accordion title="Python Script: Staircase Generator">
+
+```python
+#!/usr/bin/env python3
+"""Generate staircase terrain for testing step climbing."""
+
+import numpy as np
+from PIL import Image
+
+def generate_staircase(
+    width=256,
+    height=256,
+    num_steps=10,
+    step_direction='horizontal'
+):
+    """Generate staircase terrain.
+    
+    Args:
+        width, height: Resolution in pixels
+        num_steps: Number of stair steps
+        step_direction: 'horizontal' or 'vertical'
+    
+    Returns:
+        numpy array of shape (height, width) with values in [0, 1]
+    """
+    terrain = np.zeros((height, width))
+    
+    if step_direction == 'horizontal':
+        step_height = height // num_steps
+        for i in range(num_steps):
+            y_start = i * step_height
+            y_end = (i + 1) * step_height
+            terrain[y_start:y_end, :] = i / (num_steps - 1)
+    else:  # vertical
+        step_width = width // num_steps
+        for i in range(num_steps):
+            x_start = i * step_width
+            x_end = (i + 1) * step_width
+            terrain[:, x_start:x_end] = i / (num_steps - 1)
+    
+    return terrain
+
+if __name__ == "__main__":
+    # Generate horizontal staircase
+    terrain = generate_staircase(num_steps=8, step_direction='horizontal')
+    terrain_8bit = (terrain * 255).astype(np.uint8)
+    Image.fromarray(terrain_8bit, mode='L').save("staircase.png")
+    print("Saved staircase.png")
+    
+    # For MuJoCo, use larger z_scale to make steps visible:
+    print('Use in world.xml: <hfield name="terrain" file="staircase.png" size="7.1 9.3 .05 0.1"/>')
+```
+
+</Accordion>
+
+### Method 3: Random Obstacle Course
+
+<Accordion title="Python Script: Obstacle Course Generator">
+
+```python
+#!/usr/bin/env python3
+"""Generate terrain with random obstacles (bumps and pits)."""
+
+import numpy as np
+from PIL import Image
+from scipy.ndimage import gaussian_filter
+
+def generate_obstacle_course(
+    width=256,
+    height=256,
+    num_obstacles=20,
+    obstacle_size=20,
+    smoothness=5.0,
+    seed=None
+):
+    """Generate terrain with random bumps and pits.
+    
+    Args:
+        width, height: Resolution in pixels
+        num_obstacles: Number of bumps/pits
+        obstacle_size: Average obstacle radius
+        smoothness: Gaussian blur radius for smoothing
+        seed: Random seed
+    
+    Returns:
+        numpy array of shape (height, width) with values in [0, 1]
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    # Start with flat terrain
+    terrain = np.ones((height, width)) * 0.5
+    
+    # Add random obstacles
+    for _ in range(num_obstacles):
+        # Random center
+        cx = np.random.randint(0, width)
+        cy = np.random.randint(0, height)
+        
+        # Random size and height
+        radius = np.random.randint(obstacle_size // 2, obstacle_size * 2)
+        is_bump = np.random.rand() > 0.5  # 50% bumps, 50% pits
+        intensity = np.random.uniform(0.3, 0.5) * (1 if is_bump else -1)
+        
+        # Create obstacle mask
+        y, x = np.ogrid[:height, :width]
+        mask = (x - cx)**2 + (y - cy)**2 <= radius**2
+        
+        # Apply obstacle
+        terrain[mask] += intensity
+    
+    # Smooth terrain
+    if smoothness > 0:
+        terrain = gaussian_filter(terrain, sigma=smoothness)
+    
+    # Clip to [0, 1]
+    terrain = np.clip(terrain, 0, 1)
+    
+    return terrain
+
+if __name__ == "__main__":
+    terrain = generate_obstacle_course(
+        num_obstacles=30,
+        obstacle_size=15,
+        smoothness=3.0,
+        seed=42
+    )
+    
+    terrain_8bit = (terrain * 255).astype(np.uint8)
+    Image.fromarray(terrain_8bit, mode='L').save("obstacles.png")
+    print("Saved obstacles.png")
+    print('Use in world.xml: <hfield name="terrain" file="obstacles.png" size="7.1 9.3 .04 0.1"/>')
+```
+
+</Accordion>
+
+## Using Custom Terrains
+
+### Step 1: Generate Heightfield
+
+```bash
+cd ~/workspace/source/model
+python3 generate_terrain.py --scale 60.0 --output my_terrain.png
+```
+
+### Step 2: Update World XML
+
+Edit `~/workspace/source/model/world_train.xml`:
+
+```xml
+<asset>
+  <!-- Original terrain -->
+  <!-- <hfield name="terrain" file="hfield.png" size="7.1 9.3 .025 0.1"/> -->
+  
+  <!-- Custom terrain -->
+  <hfield name="terrain" file="my_terrain.png" size="7.1 9.3 .025 0.1"/>
+</asset>
+```
+
+### Step 3: Test in Simulation
+
+```bash
+python3 height_control.py
+```
+
+<Note>
+If the robot falls through the terrain, increase `z_offset` (4th parameter in `size`).
+</Note>
+
+### Step 4: Train with New Terrain
+
+```bash
+python3 train_adaptive_gait_ppo.py
+```
+
+The environment automatically loads `model/world_train.xml`.
+
+## Terrain Design Guidelines
+
+### Height Scale Recommendations
+
+<Accordion title="Choosing z_scale">
+
+**Robot Leg Capabilities**:
+- Maximum step height: ~0.08m (8cm)
+- Typical step height: 0.04m (4cm)
+- Body clearance: 0.05m (5cm)
+
+**Recommended z_scale Values**:
+
+| Difficulty | z_scale | Description |
+|------------|---------|-------------|
+| Easy       | 0.015m  | Gentle undulations, good for initial training |
+| Medium     | 0.025m  | Default, balanced difficulty |
+| Hard       | 0.040m  | Challenging, near robot's step limit |
+| Extreme    | 0.060m  | May require advanced adaptation |
+
+**Example**:
+```xml
+<!-- Easy terrain for early training -->
+<hfield name="terrain" file="gentle.png" size="7.1 9.3 .015 0.1"/>
+
+<!-- Hard terrain for final evaluation -->
+<hfield name="terrain" file="rocky.png" size="7.1 9.3 .040 0.1"/>
+```
+
+</Accordion>
+
+### Resolution Considerations
+
+<Accordion title="Choosing Resolution">
+
+**Heightfield Resolution**:
+- **64×64**: Very coarse, fast simulation, low detail
+- **128×128**: Acceptable for training, moderate detail
+- **256×256**: Recommended, good detail-to-performance ratio
+- **512×512**: High detail, slower simulation
+- **1024×1024**: Maximum detail, significant performance cost
+
+**Calculation**:
+```python
+# For 7.1m × 9.3m terrain with 256×256 resolution:
+cell_size_x = 7.1 / 256  # = 0.0277m = 2.77cm
+cell_size_y = 9.3 / 256  # = 0.0363m = 3.63cm
+
+# Robot foot size: ~1.5cm diameter
+# Cell size should be similar to foot size for accurate contact
+```
+
+<Warning>
+Resolutions below 128×128 may cause inaccurate foot contact detection.
+</Warning>
+
+</Accordion>
+
+### Feature Frequency
+
+<Accordion title="Balancing Smooth vs Rough">
+
+**Perlin Noise Parameters**:
+
+```python
+# Smooth rolling hills (easy for robot)
+generate_perlin_terrain(scale=100.0, octaves=3)
+# - Large scale = low spatial frequency
+# - Few octaves = less detail
+
+# Balanced terrain (medium difficulty)
+generate_perlin_terrain(scale=50.0, octaves=6)
+# - Default parameters
+
+# Rocky rough terrain (hard for robot)
+generate_perlin_terrain(scale=20.0, octaves=8)
+# - Small scale = high spatial frequency
+# - Many octaves = fine detail
+```
+
+**Rule of Thumb**:
+- Scale < 30: Very rough, may be too difficult
+- Scale 30-60: Balanced
+- Scale 60-100: Smooth, good for early training
+- Scale > 100: Very smooth, may be too easy
+
+</Accordion>
+
+## Advanced Terrain Generation
+
+### Curriculum Learning Terrains
+
+<Accordion title="Progressive Difficulty">
+
+Create a series of terrains with increasing difficulty:
+
+```python
+#!/usr/bin/env python3
+"""Generate curriculum of terrains with progressive difficulty."""
+
+import numpy as np
+from PIL import Image
+from noise import pnoise2
+
+def generate_curriculum_terrain(difficulty_level):
+    """Generate terrain based on difficulty level (0-10).
+    
+    Args:
+        difficulty_level: 0 (easiest) to 10 (hardest)
+    """
+    # Interpolate parameters based on difficulty
+    scale = np.interp(difficulty_level, [0, 10], [120.0, 20.0])
+    octaves = int(np.interp(difficulty_level, [0, 10], [2, 8]))
+    z_scale = np.interp(difficulty_level, [0, 10], [0.010, 0.050])
+    
+    # Generate terrain
+    terrain = np.zeros((256, 256))
+    for y in range(256):
+        for x in range(256):
+            noise_val = pnoise2(
+                x / scale, y / scale,
+                octaves=octaves,
+                persistence=0.5,
+                lacunarity=2.0
+            )
+            terrain[y, x] = (noise_val + 1.0) / 2.0
+    
+    # Save
+    filename = f"terrain_level_{difficulty_level}.png"
+    terrain_8bit = (terrain * 255).astype(np.uint8)
+    Image.fromarray(terrain_8bit, mode='L').save(filename)
+    
+    print(f"Level {difficulty_level}: scale={scale:.1f}, octaves={octaves}, z_scale={z_scale:.3f}m")
+    print(f"  Saved {filename}")
+    print(f'  XML: <hfield name="terrain" file="{filename}" size="7.1 9.3 {z_scale:.3f} 0.1"/>')
+    print()
+
+if __name__ == "__main__":
+    for level in range(0, 11, 2):  # Levels 0, 2, 4, 6, 8, 10
+        generate_curriculum_terrain(level)
+```
+
+**Usage in Training**:
+```python
+# In train_adaptive_gait_ppo.py, use callbacks to switch terrains
+from callbacks.curriculum_callback import CurriculumCallback
+
+callback = CurriculumCallback(
+    terrain_files=[
+        "terrain_level_0.png",
+        "terrain_level_2.png",
+        "terrain_level_4.png",
+        # ...
+    ],
+    switch_frequency=1_000_000  # Switch every 1M steps
+)
+```
+
+See `~/workspace/source/callbacks/curriculum_callback.py` for implementation.
+
+</Accordion>
+
+### Combining Multiple Noise Sources
+
+<Accordion title="Layered Terrain Features">
+
+```python
+def generate_layered_terrain(width=256, height=256):
+    """Combine multiple noise sources for complex terrain."""
+    # Base layer: large smooth hills
+    base = generate_perlin_terrain(width, height, scale=100.0, octaves=4)
+    
+    # Detail layer: small rough features
+    detail = generate_perlin_terrain(width, height, scale=20.0, octaves=6)
+    
+    # Obstacle layer: localized bumps
+    obstacles = generate_obstacle_course(width, height, num_obstacles=15)
+    
+    # Combine with weights
+    terrain = 0.5 * base + 0.3 * detail + 0.2 * obstacles
+    
+    # Normalize to [0, 1]
+    terrain = (terrain - terrain.min()) / (terrain.max() - terrain.min())
+    
+    return terrain
+```
+
+This creates terrain with:
+1. Large-scale hills (base)
+2. Fine surface texture (detail)
+3. Discrete obstacles (obstacles)
+
+</Accordion>
+
+### Real-World Terrain from DEMs
+
+<Accordion title="Import GeoTIFF Elevation Data">
+
+Convert real-world elevation data (Digital Elevation Models) to MuJoCo heightfields:
+
+```python
+#!/usr/bin/env python3
+"""Convert GeoTIFF DEM to MuJoCo heightfield."""
+
+import numpy as np
+from PIL import Image
+from osgeo import gdal
+
+def dem_to_heightfield(geotiff_path, output_size=(256, 256), crop_region=None):
+    """Convert GeoTIFF DEM to heightfield PNG.
+    
+    Args:
+        geotiff_path: Path to GeoTIFF file
+        output_size: Output resolution (width, height)
+        crop_region: Optional (min_x, min_y, max_x, max_y) in pixels
+    """
+    # Open GeoTIFF
+    dataset = gdal.Open(geotiff_path)
+    band = dataset.GetRasterBand(1)
+    elevation = band.ReadAsArray()
+    
+    # Crop if specified
+    if crop_region:
+        min_x, min_y, max_x, max_y = crop_region
+        elevation = elevation[min_y:max_y, min_x:max_x]
+    
+    # Resize to target resolution
+    from scipy.ndimage import zoom
+    scale_y = output_size[1] / elevation.shape[0]
+    scale_x = output_size[0] / elevation.shape[1]
+    elevation_resized = zoom(elevation, (scale_y, scale_x), order=1)
+    
+    # Normalize to [0, 1]
+    elevation_norm = (elevation_resized - elevation_resized.min())
+    elevation_norm /= elevation_norm.max()
+    
+    # Save as PNG
+    elevation_8bit = (elevation_norm * 255).astype(np.uint8)
+    Image.fromarray(elevation_8bit, mode='L').save("real_terrain.png")
+    
+    # Print stats
+    z_min = elevation_resized.min()
+    z_max = elevation_resized.max()
+    z_range = z_max - z_min
+    
+    print(f"Original elevation range: {z_min:.2f}m to {z_max:.2f}m")
+    print(f"Total height variation: {z_range:.2f}m")
+    print(f"Recommended z_scale: {z_range / 2:.3f}m")
+    print(f"Saved real_terrain.png ({output_size[0]}x{output_size[1]})")
+
+# Example usage:
+# dem_to_heightfield("crater_dem.tif", crop_region=(100, 100, 356, 356))
+```
+
+**Data Sources**:
+- USGS Earth Explorer: https://earthexplorer.usgs.gov/
+- OpenTopography: https://opentopography.org/
+- NASA SRTM: https://www2.jpl.nasa.gov/srtm/
+
+</Accordion>
+
+## Testing and Validation
+
+### Verify Terrain in Viewer
+
+```bash
+# Quick visualization
+python3 -c "
+import mujoco
+import mujoco.viewer
+model = mujoco.MjModel.from_xml_path('model/world_train.xml')
+data = mujoco.MjData(model)
+mujoco.viewer.launch(model, data)
+"
+```
+
+### Measure Terrain Statistics
+
+<Accordion title="Analyze Heightfield Properties">
+
+```python
+import numpy as np
+from PIL import Image
+
+def analyze_heightfield(filename, z_scale=0.025):
+    """Compute terrain statistics.
+    
+    Args:
+        filename: Path to heightfield PNG
+        z_scale: MuJoCo z_scale parameter
+    """
+    img = Image.open(filename).convert('L')
+    terrain = np.array(img) / 255.0  # Normalize to [0, 1]
+    
+    # Convert to physical heights
+    heights = (terrain - 0.5) * 2 * z_scale  # Map [0,1] to [-z_scale, +z_scale]
+    
+    print(f"Terrain Analysis: {filename}")
+    print(f"Resolution: {terrain.shape[1]}×{terrain.shape[0]}")
+    print(f"Height range: [{heights.min():.4f}m, {heights.max():.4f}m]")
+    print(f"Mean height: {heights.mean():.4f}m")
+    print(f"Std deviation: {heights.std():.4f}m")
+    print(f"Max slope: {np.abs(np.gradient(heights)).max():.4f}")
+    
+    # Difficulty estimate
+    difficulty = heights.std() / 0.02  # Normalized by 2cm baseline
+    print(f"Estimated difficulty: {difficulty:.2f} (1.0 = medium)")
+
+# Example
+analyze_heightfield("model/hfield.png", z_scale=0.025)
+```
+
+</Accordion>
+
+## Troubleshooting
+
+<Accordion title="Robot Sinks into Terrain">
+
+**Cause**: `z_offset` too low or terrain has large negative values.
+
+**Solution**:
+```xml
+<!-- Increase z_offset (4th parameter) -->
+<hfield name="terrain" file="my_terrain.png" size="7.1 9.3 .025 0.15"/>
+<!--                                                          ^^^^ was 0.1 -->
+```
+
+</Accordion>
+
+<Accordion title="Terrain Appears Flat">
+
+**Cause**: `z_scale` too small or PNG has uniform gray values.
+
+**Solution**:
+1. Check PNG contrast: `python3 -c "from PIL import Image; import numpy as np; img = np.array(Image.open('hfield.png')); print(f'Range: {img.min()}-{img.max()}')"`
+2. Increase `z_scale` in XML
+3. Regenerate terrain with higher amplitude
+
+</Accordion>
+
+<Accordion title="Simulation Very Slow">
+
+**Cause**: High-resolution heightfield (>512×512) or very rough terrain.
+
+**Solution**:
+1. Reduce resolution: `--width 128 --height 128`
+2. Smooth terrain: `--scale 80.0`
+3. Simplify contact model in `robot.xml`
+
+</Accordion>
+
+## Example Terrain Recipes
+
+<CardGroup cols={2}>
+  <Card title="Beginner Terrain" icon="seedling">
+    ```bash
+    python3 generate_terrain.py \
+      --scale 100.0 --octaves 3 \
+      --output beginner.png
+    ```
+    XML: `size="7.1 9.3 .015 0.1"`
+  </Card>
+  
+  <Card title="Standard Training" icon="graduation-cap">
+    ```bash
+    python3 generate_terrain.py \
+      --scale 50.0 --octaves 6 \
+      --output training.png
+    ```
+    XML: `size="7.1 9.3 .025 0.1"`
+  </Card>
+  
+  <Card title="Rocky Challenge" icon="mountain">
+    ```bash
+    python3 generate_terrain.py \
+      --scale 30.0 --octaves 8 \
+      --output rocky.png
+    ```
+    XML: `size="7.1 9.3 .040 0.1"`
+  </Card>
+  
+  <Card title="Obstacle Course" icon="flag-checkered">
+    ```bash
+    python3 generate_obstacle_course.py \
+      --num-obstacles 25 \
+      --output obstacles.png
+    ```
+    XML: `size="7.1 9.3 .035 0.1"`
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Train on Custom Terrain" icon="robot" href="/guides/training-models">
+    Use your terrain for RL training
+  </Card>
+  <Card title="Extending Controllers" icon="code" href="/dev/extending-controllers">
+    Adapt controller for new terrain types
+  </Card>
+</CardGroup>

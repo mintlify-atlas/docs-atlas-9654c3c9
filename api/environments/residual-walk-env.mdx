@@ -1,0 +1,394 @@
+---
+title: ResidualWalkEnv
+description: Gymnasium environment for residual learning with fixed gait parameters
+---
+
+# ResidualWalkEnv
+
+A Gymnasium-compatible reinforcement learning environment for learning low-level residual corrections on top of a fixed diagonal Bézier gait controller. This environment focuses purely on foot position adjustments without modifying high-level gait parameters.
+
+## Overview
+
+The `ResidualWalkEnv` provides a simpler learning problem than `AdaptiveGaitEnv` by keeping gait parameters (step height, cycle time, etc.) fixed. The policy learns only per-leg residual corrections—small 3D foot position offsets that compensate for terrain irregularities and improve locomotion quality.
+
+<Info>
+  **Key Features**
+  - 65-dimensional observation space (no gait parameter feedback)
+  - 12-dimensional action space (3D residual per leg)
+  - Fixed gait parameters for consistent base behavior
+  - Reward optimized for velocity tracking and contact quality
+</Info>
+
+## Class Definition
+
+```python
+from envs.residual_walk_env import ResidualWalkEnv
+
+env = ResidualWalkEnv(
+    model_path="model/world_train.xml",
+    gait_params=None,
+    residual_scale=0.02,
+    max_episode_steps=1000,
+    settle_steps=500,
+    seed=None
+)
+```
+
+### Constructor Parameters
+
+<ParamField path="model_path" type="str" default="model/world_train.xml">
+  Path to the MuJoCo XML model file defining the robot and environment.
+</ParamField>
+
+<ParamField path="gait_params" type="GaitParameters | None" default="None">
+  Fixed gait parameters for the base controller. If None, uses controller defaults. These parameters remain constant throughout training.
+</ParamField>
+
+<ParamField path="residual_scale" type="float" default="0.02">
+  Scaling factor for residual corrections. Actions in [-1, 1] are multiplied by this value to get foot position offsets in meters.
+</ParamField>
+
+<ParamField path="max_episode_steps" type="int" default="1000">
+  Maximum number of simulation steps per episode before truncation.
+</ParamField>
+
+<ParamField path="settle_steps" type="int" default="500">
+  Number of steps to run with zero residuals at episode start. This allows the robot to settle into a stable gait on the terrain before learning begins.
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for reproducibility.
+</ParamField>
+
+## Spaces
+
+### Observation Space
+
+**Shape**: `(65,)` - Box space with values in `[-inf, inf]`
+
+The observation is a concatenation of the following components:
+
+<ResponseField name="body_state" type="float[13]">
+  Robot body state in world frame:
+  - **Position** (3D): x, y, z coordinates in meters
+  - **Orientation** (4D): quaternion [w, x, y, z] (normalized)
+  - **Linear velocity** (3D): body velocity in m/s
+  - **Angular velocity** (3D): body angular velocity in rad/s
+</ResponseField>
+
+<ResponseField name="joint_states" type="float[24]">
+  Joint positions and velocities for all 12 joints (3 per leg × 4 legs):
+  - **Positions** (12D): joint angles in radians
+  - **Velocities** (12D): joint angular velocities in rad/s
+</ResponseField>
+
+<ResponseField name="foot_positions" type="float[12]">
+  3D positions of each foot in body frame (3D per leg × 4 legs).
+</ResponseField>
+
+<ResponseField name="foot_velocities" type="float[12]">
+  3D velocities of each foot in body frame (3D per leg × 4 legs).
+</ResponseField>
+
+<ResponseField name="foot_contacts" type="float[4]">
+  Binary contact indicators for each leg (FL, FR, RL, RR):
+  - `1.0`: foot in contact with ground
+  - `0.0`: foot not in contact
+</ResponseField>
+
+<Note>
+  Unlike `AdaptiveGaitEnv`, this observation does NOT include current gait parameters since they are fixed.
+</Note>
+
+### Action Space
+
+**Shape**: `(12,)` - Box space with values in `[-1.0, 1.0]`
+
+Actions represent 3D foot position residual corrections:
+
+<ResponseField name="residual_corrections" type="float[12]">
+  3D foot position offsets for each leg:
+  - **FL residual** [0:3]: Front-Left leg (x, y, z)
+  - **FR residual** [3:6]: Front-Right leg (x, y, z)
+  - **RL residual** [6:9]: Rear-Left leg (x, y, z)
+  - **RR residual** [9:12]: Rear-Right leg (x, y, z)
+  
+  Each value in [-1, 1] is multiplied by `residual_scale` to get the actual offset in meters.
+</ResponseField>
+
+## Methods
+
+### reset
+
+```python
+def reset(
+    self,
+    *,
+    seed: int | None = None,
+    options: dict | None = None
+) -> tuple[np.ndarray, dict]
+```
+
+Resets the environment to initial state.
+
+<ParamField path="seed" type="int | None">
+  Optional seed for episode randomization.
+</ParamField>
+
+<ParamField path="options" type="dict | None">
+  Additional options:
+  - `randomize` (bool): If True, applies small random perturbations to initial position and orientation
+</ParamField>
+
+**Returns**: `(observation, info)`
+- `observation`: Initial 65D observation vector
+- `info`: Empty dict (metadata for future use)
+
+<Note>
+  During reset, the environment runs `settle_steps` steps with zero residuals to allow the robot to stabilize on the terrain before the episode begins.
+</Note>
+
+### step
+
+```python
+def step(
+    self,
+    action: np.ndarray
+) -> tuple[np.ndarray, float, bool, bool, dict]
+```
+
+Executes one simulation step with the given action.
+
+<ParamField path="action" type="np.ndarray">
+  12D action vector in range [-1, 1].
+</ParamField>
+
+**Returns**: `(observation, reward, terminated, truncated, info)`
+
+<ResponseField name="observation" type="np.ndarray">
+  65D observation of new state.
+</ResponseField>
+
+<ResponseField name="reward" type="float">
+  Scalar reward value (see Reward Function section).
+</ResponseField>
+
+<ResponseField name="terminated" type="bool">
+  True if episode ended due to failure condition (robot fell over).
+</ResponseField>
+
+<ResponseField name="truncated" type="bool">
+  True if episode reached max_episode_steps.
+</ResponseField>
+
+<ResponseField name="info" type="dict">
+  Additional information:
+  - `reward_components` (dict): Breakdown of reward by component
+  - `body_height` (float): Current body height in meters
+</ResponseField>
+
+### set_terrain_scale
+
+```python
+def set_terrain_scale(self, scale: float) -> None
+```
+
+Placeholder method for curriculum learning support. Currently stores the scale value for compatibility with training callbacks.
+
+<ParamField path="scale" type="float">
+  Terrain difficulty scale (future use).
+</ParamField>
+
+## Reward Function
+
+The reward function is computed in `_compute_reward()` and focuses on velocity tracking and gait quality:
+
+### Forward Velocity Tracking
+
+```python
+expected_velocity = step_length / cycle_time
+vel_error = abs(forward_vel - expected_velocity)
+reward = 300.0 * (1.0 - vel_error)
+```
+
+Tracks the expected velocity derived from gait parameters. This is more principled than simply maximizing velocity, as it accounts for the gait's natural speed.
+
+### Contact Pattern Reward
+
+```python
+# For each leg:
+if is_swing and has_contact:      # Swing leg touching (BAD)
+    contact_reward -= 0.2
+elif is_swing and not has_contact:  # Swing leg in air (GOOD)
+    contact_reward += 0.05
+elif not is_swing and has_contact:  # Stance leg on ground (GOOD)
+    contact_reward += 0.05
+else:                               # Stance leg floating (BAD)
+    contact_reward -= 0.2
+```
+
+Encourages proper contact patterns: swing legs should be in the air, stance legs should be on the ground.
+
+### Stability Penalty
+
+```python
+tilt_penalty = -3.0 * (roll² + pitch² + yaw²)
+```
+
+Penalizes body orientation deviations to maintain upright posture.
+
+### Lateral Stability
+
+```python
+lateral_error = abs(body_pos_y)
+penalty = -1.0 * lateral_error
+```
+
+Penalizes lateral drift from the initial y-position to maintain straight-line walking.
+
+**Total Reward**: Sum of all components
+
+## Termination Conditions
+
+### Terminated (Failure)
+
+Episode terminates early if:
+- `|roll| > π/3` (60°) - robot tipped sideways
+- `|pitch| > π/3` (60°) - robot tipped forward/backward
+
+### Truncated (Timeout)
+
+Episode truncates when `step_count >= max_episode_steps`.
+
+## Usage Examples
+
+### Basic Training Setup
+
+```python
+import numpy as np
+from envs.residual_walk_env import ResidualWalkEnv
+
+# Create environment
+env = ResidualWalkEnv(
+    model_path="model/world_train.xml",
+    residual_scale=0.02,
+    max_episode_steps=1000,
+    settle_steps=500
+)
+
+# Reset and run episode
+obs, info = env.reset(seed=42)
+total_reward = 0.0
+
+for _ in range(1000):
+    # Random policy (replace with trained policy)
+    action = env.action_space.sample()
+    
+    obs, reward, terminated, truncated, info = env.step(action)
+    total_reward += reward
+    
+    if terminated or truncated:
+        print(f"Episode finished with reward: {total_reward}")
+        print(f"Reward breakdown: {info['reward_components']}")
+        print(f"Final body height: {info['body_height']:.3f}m")
+        break
+```
+
+### With Custom Gait Parameters
+
+```python
+from gait_controller import GaitParameters
+from envs.residual_walk_env import ResidualWalkEnv
+
+# Define custom gait (these remain fixed during training)
+custom_gait = GaitParameters(
+    step_height=0.05,
+    step_length=0.10,
+    cycle_time=0.8,
+    body_height=0.06
+)
+
+env = ResidualWalkEnv(
+    gait_params=custom_gait,
+    residual_scale=0.025
+)
+
+obs, info = env.reset()
+print(f"Expected velocity: {env.expected_velocity:.3f} m/s")
+```
+
+### Training with PPO
+
+```python
+from stable_baselines3 import PPO
+from envs.residual_walk_env import ResidualWalkEnv
+
+# Create environment
+env = ResidualWalkEnv(
+    residual_scale=0.02,
+    max_episode_steps=1000
+)
+
+# Train PPO agent
+model = PPO(
+    "MlpPolicy",
+    env,
+    learning_rate=3e-4,
+    n_steps=2048,
+    batch_size=64,
+    verbose=1
+)
+
+model.learn(total_timesteps=1_000_000)
+model.save("residual_walk_policy")
+```
+
+### With Randomization
+
+```python
+env = ResidualWalkEnv()
+
+# Reset with randomized initial conditions for robustness
+obs, info = env.reset(
+    seed=123,
+    options={"randomize": True}
+)
+```
+
+## Expected Velocity Calculation
+
+The environment automatically computes expected forward velocity from gait parameters:
+
+```python
+expected_velocity = step_length / cycle_time
+```
+
+This value is used in the velocity tracking reward component and represents the natural forward speed of the base gait controller.
+
+**Example**: With `step_length=0.08m` and `cycle_time=0.6s`, the expected velocity is `0.133 m/s`.
+
+## Comparison with AdaptiveGaitEnv
+
+| Feature | ResidualWalkEnv | AdaptiveGaitEnv |
+|---------|----------------|------------------|
+| Observation dim | 65 | 69 |
+| Action dim | 12 | 16 |
+| Gait parameters | Fixed | Adaptive |
+| Learning complexity | Lower | Higher |
+| Terrain adaptation | Limited | Full |
+| Use case | Baseline, simple terrains | Complex terrains, advanced control |
+
+<Tip>
+  Start with `ResidualWalkEnv` for initial experiments and baselines. Once residual learning is working well, progress to `AdaptiveGaitEnv` for full adaptive capabilities.
+</Tip>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="AdaptiveGaitEnv" icon="gears" href="./adaptive-gait-env">
+    Extended environment with adaptive gait parameters
+  </Card>
+  <Card title="BezierGaitController" icon="bezier-curve" href="../controllers/diagonal-gait">
+    Base Bézier gait controller used in this environment
+  </Card>
+</CardGroup>

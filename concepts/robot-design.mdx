@@ -1,0 +1,180 @@
+---
+title: Robot Design
+description: Overview of the 12-DOF quadruped robot architecture with parallel SCARA legs
+---
+
+## Overview
+
+The quadruped robot features a custom **12-DOF (Degrees of Freedom)** design with four identical legs, each implementing a **3-DOF parallel SCARA** mechanism based on a **5-bar linkage** architecture.
+
+<Note>
+The robot design is fully open-source and fabricated using OpenSCAD. All CAD files can be manufactured for real-world deployment, though the physical prototype has not been tested yet.
+</Note>
+
+## Key Specifications
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **Total DOF** | 12 | 3 DOF per leg × 4 legs |
+| **Leg Configuration** | Parallel SCARA | Two parallel 2-link arms with 5-bar constraint |
+| **Upper Link (L1)** | 0.045 m (45 mm) | Shoulder to elbow length |
+| **Lower Link (L2)** | 0.06 m (60 mm) | Elbow to foot length |
+| **Base Distance** | 0.021 m (21 mm) | Separation between parallel arms |
+| **Default Body Height** | 0.07 m (70 mm) | Nominal stance height |
+
+## Leg Architecture
+
+### Parallel SCARA Mechanism
+
+Each leg uses a **parallel SCARA (Selective Compliance Assembly Robot Arm)** design, which provides:
+
+- **High rigidity** in the vertical plane for supporting body weight
+- **Compliance** for terrain adaptation
+- **Simplified kinematics** with analytical IK solutions
+- **Reduced computational cost** compared to serial chains
+
+### 5-Bar Linkage Structure
+
+The 5-bar linkage consists of:
+
+1. **Fixed base** with two parallel mounting points (21 mm apart)
+2. **Two shoulder joints (actuated)** - controlled independently
+3. **Two upper links** - connect shoulders to elbows (L1 = 45 mm each)
+4. **Two lower links** - connect elbows to foot (L2 = 60 mm each)
+5. **Foot (end-effector)** - shared connection point creating the closure constraint
+
+This configuration creates a **constrained parallel mechanism** where the foot position uniquely determines the configuration of both arms.
+
+<Info>
+The parallel SCARA design provides better load distribution than serial mechanisms, making it ideal for quadruped locomotion where legs must support dynamic loads during stance phase.
+</Info>
+
+## DOF Breakdown
+
+### Per-Leg DOF (3 total)
+
+1. **Tilt Actuator**: Controls lateral leg orientation (y-axis displacement)
+2. **Shoulder Left**: First parallel arm shoulder angle
+3. **Shoulder Right**: Second parallel arm shoulder angle
+
+<Accordion title="Why only 3 DOF with 4 actuators per leg?">
+While each leg has 4 servo motors (1 tilt + 2 shoulders + elbow constraint), the parallel SCARA constraint means the elbow angles are **kinematically coupled** to the shoulder angles. The 5-bar closure constraint reduces independent DOF to 3:
+
+- **Tilt**: Independent rotation for lateral positioning
+- **Shoulder angles**: Two independent angles determine foot position in sagittal plane
+- **Elbow angles**: Constrained by 5-bar geometry (dependent variables)
+
+This coupling is what enables analytical IK solutions and provides the mechanism's rigidity.
+</Accordion>
+
+## CAD Design (OpenSCAD)
+
+The robot is designed entirely in **OpenSCAD**, a parametric 3D CAD modeling tool ideal for robotic mechanisms.
+
+### Key Components
+
+```
+model/openscad/
+├── shoulder_arm.scad          # Upper link (L1 = 45mm)
+├── elbow_arm.scad             # Lower link (L2 = 60mm)
+├── base_tilt.scad             # Tilt mechanism base
+├── two_servo_base.scad        # Dual servo mounting
+├── servo.scad                 # Servo motor housing
+├── buje.scad                  # Bearing/bushing components
+└── viz/                       # Assembly visualizations
+```
+
+### Shoulder Arm Design
+
+From `shoulder_arm.scad:4-6`:
+
+```scad
+module shoulder_arm(){
+    height = 3.5;
+    length = 45;  // L1 parameter
+    $fn = 60;
+    // ... link geometry
+}
+```
+
+### Elbow Arm Design
+
+From `elbow_arm.scad:3-4`:
+
+```scad
+module elbow_arm(){
+    height = 3.5;
+    length = 60;  // L2 parameter
+    $fn = 60;
+    // ... link geometry with bearing mounts
+}
+```
+
+<Note>
+All OpenSCAD components include mounting holes for bearings (6.12mm diameter) and servo connections, enabling direct fabrication and assembly.
+</Note>
+
+## Working Modes
+
+The parallel SCARA mechanism supports **4 distinct elbow configurations**, providing different workspace regions:
+
+| Mode | Arm A | Arm B | Use Case |
+|------|-------|-------|----------|
+| 1 | Elbow Up | Elbow Down | Extended reach |
+| 2 | Elbow Down | Elbow Up | **Default mode** |
+| 3 | Both Up | Both Up | High stance |
+| 4 | Both Down | Both Down | Low stance |
+
+<Info>
+**Mode 2** (A down, B up) is used as the default configuration throughout the codebase for optimal balance between workspace and singularity avoidance.
+</Info>
+
+## Workspace Characteristics
+
+The reachable workspace for each leg is determined by:
+
+- **Radial limits**: `|L1 - L2| ≤ r ≤ L1 + L2` → 0.015 m ≤ r ≤ 0.105 m
+- **Height range**: Dependent on configuration mode and tilt angle
+- **Lateral range**: Controlled primarily by tilt actuator
+
+<Accordion title="Workspace Calculation">
+For a 2-link planar arm, the reachable region is an annulus:
+
+- **Minimum radius**: `|L1 - L2| = |0.045 - 0.06| = 0.015 m (15 mm)`
+- **Maximum radius**: `L1 + L2 = 0.045 + 0.06 = 0.105 m (105 mm)`
+
+The parallel configuration constrains this further, but maintains good coverage for typical gait step heights (15-20mm) and step lengths (40-50mm).
+</Accordion>
+
+## MuJoCo Integration
+
+The robot model is exported to MuJoCo XML format with:
+
+- **STL mesh files** generated from OpenSCAD
+- **Joint definitions** for all 12 actuators
+- **Collision geometries** for contact detection
+- **Inertial properties** estimated from geometry
+
+Model files:
+- `model/robot.xml` - Complete robot definition
+- `model/assets/` - STL meshes for all components
+- `model/world.xml` - Flat terrain environment
+- `model/world_train.xml` - Rough terrain with heightfield
+
+## Design Advantages
+
+✅ **Analytical IK**: Closed-form solutions enable fast computation
+
+✅ **High rigidity**: Parallel structure supports dynamic locomotion
+
+✅ **Fabrication-friendly**: All components designed for 3D printing and assembly
+
+✅ **Modular**: Identical legs simplify manufacturing and maintenance
+
+✅ **Simulation-ready**: Direct export to MuJoCo physics engine
+
+## Related Topics
+
+- [Inverse Kinematics](/concepts/inverse-kinematics) - IK solver implementation details
+- [Gait Control](/concepts/gait-control) - How the robot walks using this design
+- [Reinforcement Learning](/concepts/reinforcement-learning) - Adaptive control for the robot

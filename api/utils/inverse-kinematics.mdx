@@ -1,0 +1,186 @@
+---
+title: Inverse Kinematics
+description: IK solvers for parallel SCARA leg mechanism with 3DOF control
+---
+
+## Overview
+
+The inverse kinematics module provides solvers for the robot's parallel SCARA leg mechanism. The primary function `solve_leg_ik_3dof()` computes joint angles to reach a target position in 3D space, supporting multiple working modes for different elbow configurations.
+
+## solve_leg_ik_3dof()
+
+Convenience function for solving 3DOF leg inverse kinematics with robot-specific parameters.
+
+```python
+def solve_leg_ik_3dof(
+    target_position,
+    tilt_angle=None,
+    L1=None,
+    L2=None,
+    base_dist=None,
+    mode=None
+)
+```
+
+### Parameters
+
+<ParamField path="target_position" type="array" required>
+  Target position `[x, y, z]` in the leg's local frame (meters). The z-axis points downward.
+</ParamField>
+
+<ParamField path="tilt_angle" type="float" default="None">
+  Desired tilt angle in radians. If `None`, the solver automatically computes the tilt angle based on the target's y-coordinate.
+</ParamField>
+
+<ParamField path="L1" type="float" default="0.045">
+  Upper link length in meters.
+</ParamField>
+
+<ParamField path="L2" type="float" default="0.06">
+  Lower link length in meters.
+</ParamField>
+
+<ParamField path="base_dist" type="float" default="0.021">
+  Distance between the two parallel arm bases in meters.
+</ParamField>
+
+<ParamField path="mode" type="int" default="2">
+  SCARA working mode determining elbow configuration:
+  - `1`: Arm A elbow up, Arm B elbow down
+  - `2`: Arm A elbow down, Arm B elbow up (default)
+  - `3`: Both elbows up
+  - `4`: Both elbows down
+</ParamField>
+
+### Returns
+
+**tuple or None**: Returns `(tilt, shoulder_L, shoulder_R)` tuple of joint angles in radians, or `None` if the target is unreachable.
+
+- `tilt`: Tilt joint angle
+- `shoulder_L`: Left shoulder joint angle
+- `shoulder_R`: Right shoulder joint angle
+
+### Usage Example
+
+```python
+import numpy as np
+from source.ik import solve_leg_ik_3dof
+
+# Target position: 1cm forward (y), 4cm down (z)
+target = np.array([0.0, 0.01, -0.04])
+
+# Solve IK with default parameters (mode 2)
+result = solve_leg_ik_3dof(target)
+
+if result:
+    tilt, shoulder_L, shoulder_R = result
+    print(f"Tilt: {math.degrees(tilt):.1f}°")
+    print(f"Left shoulder: {math.degrees(shoulder_L):.1f}°")
+    print(f"Right shoulder: {math.degrees(shoulder_R):.1f}°")
+else:
+    print("Target unreachable")
+```
+
+### Pure Height Control Example
+
+```python
+# Control leg height without lateral displacement
+heights = [0.02, 0.04, 0.06]  # 2cm, 4cm, 6cm
+
+for height in heights:
+    target = np.array([0.0, 0.0, -height])
+    result = solve_leg_ik_3dof(target, mode=2)
+    
+    if result:
+        tilt, shoulder_L, shoulder_R = result
+        print(f"Height {height*1000:.0f}mm: angles = {result}")
+```
+
+## parallel_scara_ik()
+
+Solves 2DOF parallel SCARA inverse kinematics for planar targets.
+
+```python
+def parallel_scara_ik(
+    target,
+    L1=None,
+    L2=None,
+    base_dist=None,
+    mode=None
+)
+```
+
+### Parameters
+
+<ParamField path="target" type="array" required>
+  2D target position `[x, z]` in the planar workspace.
+</ParamField>
+
+<ParamField path="L1" type="float" default="0.045">
+  Upper link length in meters.
+</ParamField>
+
+<ParamField path="L2" type="float" default="0.06">
+  Lower link length in meters.
+</ParamField>
+
+<ParamField path="base_dist" type="float" default="0.021">
+  Distance between parallel arm bases in meters.
+</ParamField>
+
+<ParamField path="mode" type="int" default="2">
+  Elbow configuration mode (1-4). See working modes above.
+</ParamField>
+
+### Returns
+
+**tuple or None**: Returns `(θ1_A, θ2_A, θ1_B, θ2_B)` tuple containing shoulder and elbow angles for both arms, or `None` if unreachable.
+
+### Usage Example
+
+```python
+import numpy as np
+from source.ik import parallel_scara_ik
+import math
+
+# Target 40cm above center in 2D plane
+target = np.array([0, 0.4])
+
+# Try different working modes
+modes = ["Up-Down", "Down-Up", "Up-Up", "Down-Down"]
+for i, name in enumerate(modes, 1):
+    result = parallel_scara_ik(target, mode=i)
+    if result:
+        t1A, t2A, t1B, t2B = result
+        print(f"{name}: A[{math.degrees(t1A):.1f}°, {math.degrees(t2A):.1f}°] "
+              f"B[{math.degrees(t1B):.1f}°, {math.degrees(t2B):.1f}°]")
+    else:
+        print(f"{name}: unreachable")
+```
+
+## Working Modes
+
+The parallel SCARA mechanism supports four distinct working modes that determine the elbow configuration:
+
+| Mode | Arm A Elbow | Arm B Elbow | Use Case |
+|------|-------------|-------------|----------|
+| 1 | Up | Down | Alternative configuration |
+| 2 | Down | Up | **Default** - most common |
+| 3 | Up | Up | Extended reach upward |
+| 4 | Down | Down | Compact configuration |
+
+Mode 2 is the default as it provides good workspace coverage and avoids singularities for typical leg movements.
+
+## Reachability
+
+The IK solver checks reachability using the triangle inequality:
+
+```
+|L1 - L2| ≤ distance_to_target ≤ L1 + L2
+```
+
+With default parameters (L1=0.045m, L2=0.06m):
+- Minimum reach: 0.015m (1.5cm)
+- Maximum reach: 0.105m (10.5cm)
+
+Targets outside this range will return `None`.

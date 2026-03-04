@@ -1,0 +1,203 @@
+---
+title: "DiagonalGaitController"
+description: "Diagonal gait generator using state machine transitions and Bézier swing trajectories"
+---
+
+## Overview
+
+The `DiagonalGaitController` manages a trot gait with diagonal swing pairs (FL+RR and FR+RL). It uses a finite state machine to alternate between pairs and generates smooth swing trajectories using cubic Bézier curves.
+
+## Classes
+
+### DiagonalGaitController
+
+```python
+class DiagonalGaitController:
+    """Manages a trot gait with diagonal swing pairs."""
+    
+    def __init__(self, params: Optional[GaitParameters] = None) -> None:
+```
+
+<ParamField path="params" type="GaitParameters | None" default="None">
+  Configuration bundle for the trot gait. If not provided, uses default `GaitParameters()`.
+</ParamField>
+
+**Attributes:**
+- `params` (`GaitParameters`): The gait configuration
+- `state_duration` (`float`): Duration of each state phase (half cycle time)
+- `phase_elapsed` (`float`): Time elapsed in current phase
+- `active_swing_pair` (`Tuple[str, str]`): Currently swinging leg pair (e.g., `("FL", "RR")`)
+- `active_stance_pair` (`Tuple[str, str]`): Currently standing leg pair
+- `states` (`List[str]`): `["pair_a_swing", "pair_b_swing"]`
+
+### GaitParameters
+
+```python
+@dataclass
+class GaitParameters:
+    """Configuration bundle for the trot gait."""
+```
+
+<ParamField path="body_height" type="float" default="0.07">
+  Target body height above ground [meters]
+</ParamField>
+
+<ParamField path="step_length" type="float" default="0.05">
+  Full stride length in the forward direction [meters]
+</ParamField>
+
+<ParamField path="step_height" type="float" default="0.015">
+  Maximum foot lift during swing phase [meters]
+</ParamField>
+
+<ParamField path="cycle_time" type="float" default="0.8">
+  Time for a complete gait cycle (both pairs) [seconds]
+</ParamField>
+
+<ParamField path="swing_shape" type="float" default="0.35">
+  Bézier control point shape parameter (0.05 to 0.95)
+</ParamField>
+
+<ParamField path="lateral_offsets" type="Dict[str, float]" default="{FL: 0.0, FR: 0.0, RL: 0.0, RR: 0.0}">
+  Per-leg lateral (y-axis) offset adjustments [meters]
+</ParamField>
+
+## Methods
+
+### update
+
+```python
+def update(self, dt: float) -> Dict[str, np.ndarray]:
+    """Advance the gait by dt seconds and return per-leg foot targets."""
+```
+
+Advances the gait controller by `dt` seconds and computes target foot positions for all four legs.
+
+<ParamField path="dt" type="float" required>
+  Time step in seconds. If dt ≤ 0, returns cached targets without advancing.
+</ParamField>
+
+**Returns:** `Dict[str, np.ndarray]`
+
+Dictionary mapping leg names (`"FL"`, `"FR"`, `"RL"`, `"RR"`) to 3D position vectors `[x, y, z]` in the robot's body frame.
+
+**Behavior:**
+- Increments internal phase timer
+- Transitions between swing pairs when phase completes
+- Generates Bézier curves for swing legs
+- Linear trajectories for stance legs
+
+### reset
+
+```python
+def reset(self) -> None:
+    """Reset the controller to its initial phase."""
+```
+
+Resets the gait to the initial state (`pair_a_swing`) and phase elapsed to 0. Useful for starting a new gait cycle.
+
+## Constants
+
+```python
+LEG_NAMES: Tuple[str, ...] = ("FL", "FR", "RL", "RR")
+
+DIAGONAL_PAIRS: Dict[str, Tuple[str, str]] = {
+    "pair_a": ("FL", "RR"),  # Front-left + Rear-right
+    "pair_b": ("FR", "RL"),  # Front-right + Rear-left
+}
+```
+
+## Usage Example
+
+### Basic Usage
+
+```python
+from gait_controller import DiagonalGaitController, GaitParameters
+
+# Create controller with default parameters
+controller = DiagonalGaitController()
+
+# Advance gait and get foot targets
+targets = controller.update(dt=0.01)  # 10ms timestep
+
+for leg, position in targets.items():
+    print(f"{leg}: x={position[0]:.3f}, y={position[1]:.3f}, z={position[2]:.3f}")
+```
+
+### Custom Parameters
+
+```python
+from gait_controller import DiagonalGaitController, GaitParameters
+
+# Configure custom gait parameters
+params = GaitParameters(
+    body_height=0.05,
+    step_length=0.06,
+    step_height=0.04,
+    cycle_time=0.8,
+)
+
+controller = DiagonalGaitController(params)
+
+# Simulation loop
+dt = 0.01  # 100 Hz
+for _ in range(100):
+    targets = controller.update(dt)
+    # Send targets to robot inverse kinematics...
+```
+
+### With Lateral Offsets
+
+```python
+from gait_controller import DiagonalGaitController, GaitParameters
+
+params = GaitParameters(
+    body_height=0.05,
+    step_length=0.06,
+    step_height=0.04,
+    cycle_time=0.8,
+    lateral_offsets={
+        "FL": -0.02,  # Shift left legs outward
+        "FR": 0.02,   # Shift right legs outward
+        "RL": -0.02,
+        "RR": 0.02,
+    }
+)
+
+controller = DiagonalGaitController(params)
+targets = controller.update(0.01)
+```
+
+## Implementation Details
+
+### State Machine
+
+The controller uses the `transitions` library to manage two states:
+- **pair_a_swing**: FL and RR legs in swing phase, FR and RL in stance
+- **pair_b_swing**: FR and RL legs in swing phase, FL and RR in stance
+
+Transitions occur automatically when `phase_elapsed ≥ state_duration`.
+
+### Swing Trajectory
+
+Swing legs follow a cubic Bézier curve with control points:
+```python
+P0 = [-step_length/2, lateral_offset, body_height]        # Start
+P1 = [-step_length/2 * shape, lateral_offset, lift_height] # Control
+P2 = [step_length/2 * shape, lateral_offset, lift_height]  # Control
+P3 = [step_length/2, lateral_offset, body_height]          # End
+```
+
+where `lift_height = body_height - step_height`.
+
+### Stance Trajectory
+
+Stance legs sweep linearly from front to rear:
+```python
+x(t) = step_length/2 - step_length * t  # t ∈ [0, 1]
+z = body_height  # Constant height
+```
+
+## Source
+
+Location: `~/workspace/source/gait_controller.py`

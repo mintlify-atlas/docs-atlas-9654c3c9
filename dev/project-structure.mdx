@@ -1,0 +1,534 @@
+---
+title: Project Structure
+description: Overview of the quadruped robot project architecture and file organization
+---
+
+This page provides a comprehensive overview of the project's directory structure, key modules, and architectural patterns.
+
+## Directory Tree
+
+The project is organized into several top-level directories, each serving a specific purpose:
+
+```
+~/workspace/source/
+├── model/                    # MuJoCo simulation models
+│   ├── world.xml            # Flat terrain environment
+│   ├── world_train.xml      # Rough terrain with heightfield
+│   ├── robot.xml            # Robot MJCF definition
+│   ├── assets/              # STL meshes and textures
+│   ├── openscad/            # CAD source files
+│   └── primitives_model/    # Simplified robot model
+│
+├── controllers/             # Gait generation and control
+│   ├── adaptive_gait_controller.py  # RL-based adaptive controller
+│   └── bezier_gait_residual.py      # Bezier-based gait with residuals
+│
+├── envs/                    # Gymnasium RL environments
+│   ├── adaptive_gait_env.py         # Adaptive gait training env
+│   └── residual_walk_env.py         # Residual learning env
+│
+├── utils/                   # Core utilities
+│   ├── control_utils.py     # Joint control helpers
+│   └── sensor_utils.py      # Sensor reading and processing
+│
+├── gui/                     # PyQt5 interface
+│   ├── gui.py               # Main GUI application
+│   ├── setup_database.py    # Database initialization
+│   └── icons/               # UI assets
+│
+├── tests/                   # Testing and validation
+│   ├── compare_baseline_adaptive.py     # Performance comparison
+│   ├── compare_residual_vs_baseline.py  # Residual vs baseline
+│   └── ik_bezier/           # IK and trajectory tests
+│
+├── callbacks/               # Training callbacks
+│   └── curriculum_callback.py   # Curriculum learning
+│
+├── configs/                 # Configuration files
+│   └── expanded_gait_ranges.py  # Gait parameter ranges
+│
+├── phases_test/             # Phased testing scripts
+│   ├── phase1_verify_controller.py  # Controller verification
+│   ├── phase2_env_smoke.py          # Environment smoke tests
+│   └── phase4_viewer_play_policy.py # Policy playback
+│
+└── runs/                    # Training outputs
+    └── adaptive_gait_*/     # Timestamped run directories
+        ├── final_model.zip
+        ├── vec_normalize.pkl
+        └── checkpoints/
+```
+
+## Key Modules
+
+### Core Control System
+
+<Accordion title="gait_controller.py - Diagonal Gait Generator">
+  
+**Location**: `~/workspace/source/gait_controller.py`
+
+Implements the baseline diagonal (trot) gait using state machines and Bezier curves.
+
+**Key Classes**:
+- `GaitParameters`: Configuration dataclass for gait settings
+- `DiagonalGaitController`: State machine-based gait generator
+
+**Features**:
+- Diagonal pair coordination (FL+RR, FR+RL)
+- Bezier swing trajectories (cubic curves)
+- Linear stance phase trajectories
+- Configurable cycle time, step height/length
+
+**Usage Example**:
+```python
+from gait_controller import DiagonalGaitController, GaitParameters
+
+params = GaitParameters(
+    body_height=0.05,
+    step_length=0.06,
+    step_height=0.04,
+    cycle_time=0.8
+)
+controller = DiagonalGaitController(params)
+
+# Update loop
+for _ in range(1000):
+    targets = controller.update(dt=0.002)  # Returns {"FL": [x,y,z], ...}
+```
+
+</Accordion>
+
+<Accordion title="ik.py - Inverse Kinematics Solver">
+
+**Location**: `~/workspace/source/ik.py`
+
+Provides 3-DOF inverse kinematics for the parallel SCARA leg mechanism.
+
+**Key Functions**:
+- `solve_leg_ik_3dof(target, tilt_angle, L1, L2, base_dist, mode)`: Main IK solver
+- `parallel_scara_ik(target, L1, L2, base_dist, mode)`: 2-DOF planar solver
+- `solve_2link_ik(target, base, L1, L2, elbow_up)`: Basic 2-link IK
+
+**Parameters**:
+- `L1 = 0.045` m (upper link)
+- `L2 = 0.06` m (lower link)
+- `base_dist = 0.021` m (parallel arm separation)
+- `mode`: Elbow configuration (1-4)
+
+**Returns**: `(tilt_angle, shoulder_A, shoulder_B)` or `None` if unreachable
+
+See `~/workspace/source/ik.py:1` for implementation details.
+
+</Accordion>
+
+<Accordion title="controllers/adaptive_gait_controller.py - RL Controller">
+
+**Location**: `~/workspace/source/controllers/adaptive_gait_controller.py`
+
+Extends the baseline gait controller with online parameter adaptation via reinforcement learning.
+
+**Key Features**:
+- Modulates 4 gait parameters: `step_height`, `step_length`, `cycle_time`, `body_height`
+- Applies per-leg residual corrections (12D)
+- Clips parameter updates to safe ranges
+- Preserves gait phase during parameter changes
+
+**Parameter Ranges**:
+```python
+DEFAULT_RANGES = {
+    "step_height": (0.03, 0.090, 0.04),   # min, max, default (meters)
+    "step_length": (0.030, 0.100, 0.06),
+    "cycle_time": (0.800, 1.500, 0.80),   # seconds
+    "body_height": (0.04, 0.055, 0.05),
+}
+```
+
+**API**:
+```python
+controller = AdaptiveGaitController(base_params, residual_scale=0.01)
+
+# Apply policy output
+param_deltas = {"step_height": 0.002, "step_length": -0.001, ...}
+residuals = {"FL": [0.001, 0, -0.002], "FR": [...], ...}
+targets = controller.update_with_residuals(dt, residuals, param_deltas)
+```
+
+See `~/workspace/source/controllers/adaptive_gait_controller.py:20` for full implementation.
+
+</Accordion>
+
+### Environment System
+
+<Accordion title="envs/adaptive_gait_env.py - Training Environment">
+
+**Location**: `~/workspace/source/envs/adaptive_gait_env.py`
+
+Gymnasium environment for training adaptive gait policies with PPO.
+
+**Observation Space (69D)**:
+- Body state: position (3), quaternion (4), linear velocity (3), angular velocity (3)
+- Joint state: positions (12), velocities (12)
+- Foot positions (12), foot velocities (12)
+- Foot contacts (4)
+- Current gait parameters (4)
+
+**Action Space (16D)**:
+- Gait parameter deltas (4): scaled by `PARAM_DELTA_SCALES`
+- Per-leg residuals (12): scaled by `residual_scale`
+
+**Reward Function**:
+```python
+rewards = {
+    "forward_velocity": 2000.0 * forward_vel,
+    "lateral_velocity_penalty": -2.0 * abs(lateral_vel),
+    "contact_pattern": contact_reward,  # Swing/stance correctness
+    "stability": -2.0 * (roll² + pitch² + yaw²)
+}
+```
+
+**Key Methods**:
+- `reset()`: Initialize episode with optional randomization
+- `step(action)`: Execute one control step
+- `_compute_reward()`: Multi-component reward computation
+- `_check_termination()`: Detect falls and timeouts
+
+See `~/workspace/source/envs/adaptive_gait_env.py:60` for details.
+
+</Accordion>
+
+### Utility Modules
+
+<Accordion title="utils/sensor_utils.py - Sensor Reading">
+
+**Location**: `~/workspace/source/utils/sensor_utils.py`
+
+Provides high-level interface to MuJoCo sensors.
+
+**SensorReader Class**:
+```python
+reader = SensorReader(model, data)
+
+# Read sensors
+body_pos = reader.read_sensor("body_pos")        # [x, y, z]
+body_quat = reader.get_body_quaternion()         # [w, x, y, z]
+joint_states = reader.get_joint_states()         # [q1, ..., q12, dq1, ..., dq12]
+foot_positions = reader.get_foot_positions()     # [x1, y1, z1, ...]
+```
+
+**Available Sensors**:
+- `body_pos`, `body_quat`: Base position and orientation
+- `body_linvel`, `body_angvel`: Base velocities
+- `FL_foot_pos`, `FR_foot_pos`, etc.: Individual foot positions
+
+</Accordion>
+
+<Accordion title="utils/control_utils.py - Joint Control">
+
+**Location**: `~/workspace/source/utils/control_utils.py`
+
+Helpers for applying joint angles to the MuJoCo model.
+
+**Functions**:
+```python
+from utils.control_utils import apply_leg_angles
+
+# Apply IK solution to leg
+angles = (tilt, shoulder_A, shoulder_B)  # From IK solver
+apply_leg_angles(data, "FL", angles)     # Updates data.ctrl
+```
+
+**Joint Naming Convention**:
+- `{leg}_tilt`: Leg rotation around body
+- `{leg}_shoulder_left`: Left parallel arm
+- `{leg}_shoulder_right`: Right parallel arm
+
+</Accordion>
+
+## Training Pipeline
+
+### Training Script
+
+**Location**: `~/workspace/source/train_adaptive_gait_ppo.py`
+
+Main training script using Stable Baselines3 PPO.
+
+**Key Configuration**:
+```python
+@dataclass
+class TrainingConfig:
+    total_timesteps: int = 30_000_000
+    n_envs: int = 84                    # Parallel environments
+    n_steps: int = 4096                 # Steps per update
+    batch_size: int = 2048
+    learning_rate: float = 3e-4
+    network_size: str = "large"         # [512, 256, 128] layers
+    residual_scale: float = 0.01
+```
+
+**Usage**:
+```bash
+python3 train_adaptive_gait_ppo.py
+```
+
+**Output Structure**:
+```
+runs/adaptive_gait_YYYYMMDD_HHMMSS/
+├── final_model.zip          # Trained policy
+├── vec_normalize.pkl        # Normalization stats
+├── config.txt               # Training config
+├── checkpoints/             # Periodic checkpoints
+│   ├── rl_model_500000_steps.zip
+│   └── ...
+└── PPO_1/                   # TensorBoard logs
+```
+
+See `~/workspace/source/train_adaptive_gait_ppo.py:1` for full implementation.
+
+### Playback Scripts
+
+<Accordion title="play_adaptive_policy.py - Policy Evaluation">
+
+**Location**: `~/workspace/source/play_adaptive_policy.py`
+
+**Usage**:
+```bash
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_*/final_model.zip \
+    --normalize runs/adaptive_gait_*/vec_normalize.pkl \
+    --seconds 30 \
+    --deterministic
+```
+
+**Options**:
+- `--flat`: Use flat terrain instead of rough
+- `--no-reset`: Disable auto-reset on termination
+- `--record`: Save video recording
+
+</Accordion>
+
+## ROS2 Integration
+
+### sim.py - ROS2 Simulation Node
+
+**Location**: `~/workspace/source/sim.py`
+
+Bridge between MuJoCo simulation and ROS2 ecosystem.
+
+**Topics**:
+- `/robot_camera` (`sensor_msgs/Image`): 640x480 RGB @ 10 Hz
+- `/body_state` (`std_msgs/Float32MultiArray`): [x, y, z, roll, pitch, yaw]
+- `/movement_command` (`std_msgs/Int32`): 0=stop, 1=forward, 2=backward
+
+**Services**:
+- `/restart_simulation` (`std_srvs/Trigger`): Reset simulation state
+
+**Usage**:
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 sim.py                  # Flat terrain
+python3 sim.py --terrain rough  # Rough terrain
+```
+
+### GUI Integration
+
+**Location**: `~/workspace/source/gui/gui.py`
+
+PyQt5 GUI with joystick control and camera feed.
+
+**Features**:
+- Real-time camera display
+- Joystick input handling (pygame)
+- Reset button (calls `/restart_simulation` service)
+
+**Launch**:
+```bash
+source /opt/ros/jazzy/setup.bash
+cd gui
+python3 gui.py
+```
+
+<Note>
+Both `sim.py` and `gui.py` must be running simultaneously for full functionality.
+</Note>
+
+## Model Files
+
+### MuJoCo World Definitions
+
+<Accordion title="world.xml - Flat Terrain">
+
+**Location**: `~/workspace/source/model/world.xml`
+
+Simple flat ground plane for baseline testing.
+
+```xml
+<mujoco>
+  <worldbody>
+    <geom name="floor" type="plane" size="10 10 0.1" 
+          material="groundplane"/>
+  </worldbody>
+  <include file="robot.xml"/>
+</mujoco>
+```
+
+</Accordion>
+
+<Accordion title="world_train.xml - Rough Terrain">
+
+**Location**: `~/workspace/source/model/world_train.xml`
+
+Heightfield-based rough terrain for RL training.
+
+```xml
+<asset>
+  <!-- Heightfield from PNG image -->
+  <hfield name="terrain" file="hfield.png" 
+          size="7.1 9.3 .025 0.1"/>
+</asset>
+
+<worldbody>
+  <geom name="terrain" type="hfield" hfield="terrain" 
+        material="groundplane"/>
+</worldbody>
+```
+
+See [Custom Terrains](/dev/custom-terrains) for heightfield generation.
+
+</Accordion>
+
+### Robot Definition
+
+**Location**: `~/workspace/source/model/robot.xml`
+
+12-DOF quadruped with 4x 3-DOF parallel SCARA legs.
+
+**Key Features**:
+- Body size: 0.1m × 0.08m × 0.03m
+- Leg attachment offsets: ±0.05m (X), ±0.04m (Y)
+- Joint limits: Tilt ±45°, Shoulders ±180°
+- PID control: kp=100, damping=5
+
+<Warning>
+Do not modify joint limits without updating IK solver constraints in `ik.py`.
+</Warning>
+
+## Testing and Validation
+
+### Comparison Tests
+
+**Location**: `~/workspace/source/tests/compare_baseline_adaptive.py`
+
+Comprehensive 3-step comparison:
+1. Baseline on flat terrain
+2. Baseline on rough terrain
+3. Adaptive policy on rough terrain
+
+**Output**:
+- Terminal: Tabular comparison of metrics
+- Plot: 3-panel trajectory visualization
+- JSON: Raw trajectory data
+
+**Usage**:
+```bash
+python3 tests/compare_baseline_adaptive.py \
+    --model runs/adaptive_gait_*/final_model.zip \
+    --normalize runs/adaptive_gait_*/vec_normalize.pkl \
+    --seconds 17
+```
+
+### Unit Tests
+
+<Accordion title="Test IK Solver">
+
+```bash
+python3 ik.py
+```
+
+Runs built-in test suite covering:
+- 2-DOF planar IK for all 4 elbow modes
+- 3-DOF IK with tilt control
+- Pure height control (zero lateral displacement)
+- Reachability boundary checks
+
+</Accordion>
+
+<Accordion title="Test Gait Controller">
+
+```bash
+python3 gait_controller.py
+```
+
+Verifies:
+- State machine transitions
+- Bezier curve generation
+- Stance phase trajectories
+- Diagonal pair coordination
+
+</Accordion>
+
+<Accordion title="Test Environment">
+
+```bash
+python3 test_adaptive_controller.py
+```
+
+Validates:
+- Environment reset
+- Action/observation spaces
+- Reward computation
+- Termination conditions
+
+</Accordion>
+
+## Development Workflow
+
+### Typical Iteration Cycle
+
+1. **Modify controller/environment**
+   ```bash
+   vim controllers/adaptive_gait_controller.py
+   ```
+
+2. **Run unit tests**
+   ```bash
+   python3 test_adaptive_controller.py
+   ```
+
+3. **Train new policy**
+   ```bash
+   python3 train_adaptive_gait_ppo.py
+   ```
+
+4. **Evaluate performance**
+   ```bash
+   python3 tests/compare_baseline_adaptive.py --model runs/latest/final_model.zip
+   ```
+
+5. **Monitor training**
+   ```bash
+   tensorboard --logdir runs/
+   ```
+
+### Code Style
+
+- Type hints: All functions use PEP 484 annotations
+- Docstrings: Google style
+- Line length: 100 characters
+- Imports: Sorted with `isort`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Debugging" icon="bug" href="/dev/debugging">
+    Learn debugging techniques for MuJoCo, RL, and ROS2
+  </Card>
+  <Card title="Custom Terrains" icon="mountain" href="/dev/custom-terrains">
+    Generate custom MuJoCo heightfield terrains
+  </Card>
+  <Card title="Extending Controllers" icon="code" href="/dev/extending-controllers">
+    Add new gait parameters or controller behaviors
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/controllers/diagonal-gait">
+    Detailed API documentation
+  </Card>
+</CardGroup>

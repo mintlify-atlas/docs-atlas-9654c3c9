@@ -1,0 +1,353 @@
+---
+title: AdaptiveGaitEnv
+description: Gymnasium environment for adaptive gait parameter learning with residual corrections
+---
+
+# AdaptiveGaitEnv
+
+A Gymnasium-compatible reinforcement learning environment that enables learning both high-level gait parameters and low-level residual corrections for quadruped locomotion on rough terrain.
+
+## Overview
+
+The `AdaptiveGaitEnv` extends the residual learning approach by allowing the policy to dynamically adjust gait parameters during execution. The agent learns to modulate:
+
+1. **High-level gait parameters**: step height, step length, cycle time, and body height
+2. **Low-level residual corrections**: per-leg foot position offsets (3D per leg)
+
+This dual-level control enables sophisticated terrain adaptation, such as taking higher steps over obstacles, adjusting stride length for stability, or modulating gait frequency based on ground conditions.
+
+<Info>
+  **Key Features**
+  - 69-dimensional observation space capturing full robot state
+  - 16-dimensional action space (4 parameter deltas + 12 residuals)
+  - Reward function balancing forward velocity, contact patterns, and stability
+  - Built on MuJoCo physics simulation
+</Info>
+
+## Class Definition
+
+```python
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+
+env = AdaptiveGaitEnv(
+    model_path="model/world_train.xml",
+    gait_params=None,
+    residual_scale=0.01,
+    max_episode_steps=60000,
+    settle_steps=0,
+    seed=None
+)
+```
+
+### Constructor Parameters
+
+<ParamField path="model_path" type="str" default="model/world_train.xml">
+  Path to the MuJoCo XML model file defining the robot and environment.
+</ParamField>
+
+<ParamField path="gait_params" type="GaitParameters | None" default="None">
+  Initial gait parameters for the controller. If None, uses controller defaults.
+</ParamField>
+
+<ParamField path="residual_scale" type="float" default="0.01">
+  Scaling factor for residual corrections. Actions in [-1, 1] are multiplied by this value to get foot position offsets in meters.
+</ParamField>
+
+<ParamField path="max_episode_steps" type="int" default="60000">
+  Maximum number of simulation steps per episode before truncation.
+</ParamField>
+
+<ParamField path="settle_steps" type="int" default="0">
+  Number of steps to run with zero residuals at episode start, allowing the robot to stabilize on terrain.
+</ParamField>
+
+<ParamField path="seed" type="int | None" default="None">
+  Random seed for reproducibility.
+</ParamField>
+
+## Spaces
+
+### Observation Space
+
+**Shape**: `(69,)` - Box space with values in `[-inf, inf]`
+
+The observation is a concatenation of the following components:
+
+<ResponseField name="body_state" type="float[13]">
+  Robot body state in world frame:
+  - **Position** (3D): x, y, z coordinates in meters
+  - **Orientation** (4D): quaternion [w, x, y, z] (normalized)
+  - **Linear velocity** (3D): body velocity in m/s
+  - **Angular velocity** (3D): body angular velocity in rad/s
+</ResponseField>
+
+<ResponseField name="joint_states" type="float[24]">
+  Joint positions and velocities for all 12 joints (3 per leg × 4 legs):
+  - **Positions** (12D): joint angles in radians
+  - **Velocities** (12D): joint angular velocities in rad/s
+</ResponseField>
+
+<ResponseField name="foot_positions" type="float[12]">
+  3D positions of each foot in body frame (3D per leg × 4 legs).
+</ResponseField>
+
+<ResponseField name="foot_velocities" type="float[12]">
+  3D velocities of each foot in body frame (3D per leg × 4 legs).
+</ResponseField>
+
+<ResponseField name="foot_contacts" type="float[4]">
+  Binary contact indicators for each leg (FL, FR, RL, RR):
+  - `1.0`: foot in contact with ground
+  - `0.0`: foot not in contact
+</ResponseField>
+
+<ResponseField name="gait_parameters" type="float[4]">
+  Current gait parameters normalized to [-1, 1] range:
+  - **step_height**: normalized current step height
+  - **step_length**: normalized current stride length
+  - **cycle_time**: normalized current gait cycle duration
+  - **body_height**: normalized current target body height
+</ResponseField>
+
+### Action Space
+
+**Shape**: `(16,)` - Box space with values in `[-1.0, 1.0]`
+
+Actions are structured as follows:
+
+<ResponseField name="parameter_deltas" type="float[4]">
+  Deltas to apply to gait parameters (indices 0-3):
+  - **d_step_height** [0]: change in step height, scaled by 0.005m
+  - **d_step_length** [1]: change in step length, scaled by 0.005m
+  - **d_cycle_time** [2]: change in cycle time, scaled by 0.05s
+  - **d_body_height** [3]: change in body height, scaled by 0.003m
+  
+  Each action value in [-1, 1] is multiplied by its corresponding scale to produce the actual parameter change.
+</ResponseField>
+
+<ResponseField name="residual_corrections" type="float[12]">
+  3D foot position offsets for each leg (indices 4-15):
+  - **FL residual** [4:7]: Front-Left leg (x, y, z)
+  - **FR residual** [7:10]: Front-Right leg (x, y, z)
+  - **RL residual** [10:13]: Rear-Left leg (x, y, z)
+  - **RR residual** [13:16]: Rear-Right leg (x, y, z)
+  
+  Each value is multiplied by `residual_scale` to get offset in meters.
+</ResponseField>
+
+## Methods
+
+### reset
+
+```python
+def reset(
+    self,
+    *,
+    seed: int | None = None,
+    options: dict | None = None
+) -> tuple[np.ndarray, dict]
+```
+
+Resets the environment to initial state.
+
+<ParamField path="seed" type="int | None">
+  Optional seed for episode randomization.
+</ParamField>
+
+<ParamField path="options" type="dict | None">
+  Additional options:
+  - `randomize` (bool): If True, applies small random perturbations to initial position and orientation
+</ParamField>
+
+**Returns**: `(observation, info)`
+- `observation`: Initial 69D observation vector
+- `info`: Empty dict (metadata for future use)
+
+### step
+
+```python
+def step(
+    self,
+    action: np.ndarray
+) -> tuple[np.ndarray, float, bool, bool, dict]
+```
+
+Executes one simulation step with the given action.
+
+<ParamField path="action" type="np.ndarray">
+  16D action vector in range [-1, 1].
+</ParamField>
+
+**Returns**: `(observation, reward, terminated, truncated, info)`
+
+<ResponseField name="observation" type="np.ndarray">
+  69D observation of new state.
+</ResponseField>
+
+<ResponseField name="reward" type="float">
+  Scalar reward value (see Reward Function section).
+</ResponseField>
+
+<ResponseField name="terminated" type="bool">
+  True if episode ended due to failure condition (robot fell over).
+</ResponseField>
+
+<ResponseField name="truncated" type="bool">
+  True if episode reached max_episode_steps.
+</ResponseField>
+
+<ResponseField name="info" type="dict">
+  Additional information:
+  - `reward_components` (dict): Breakdown of reward by component
+  - `body_height` (float): Current body height in meters
+  - `gait_params` (dict): Current gait parameter values
+</ResponseField>
+
+## Reward Function
+
+The reward function is computed in `_compute_reward()` and consists of multiple components:
+
+### Forward Velocity Reward
+
+```python
+reward = 2000.0 * forward_vel
+```
+
+Primary objective: maximize forward velocity along the x-axis. High weight encourages fast locomotion.
+
+### Lateral Velocity Penalty
+
+```python
+penalty = -2.0 * abs(lateral_vel)
+```
+
+Penalizes sideways drift to maintain straight-line walking.
+
+### Contact Pattern Reward
+
+```python
+# For each leg:
+if is_swing and has_contact:      # Swing leg touching (BAD)
+    contact_reward -= 0.5
+elif is_swing and not has_contact:  # Swing leg in air (GOOD)
+    contact_reward += 0.2
+elif not is_swing and has_contact:  # Stance leg on ground (GOOD)
+    contact_reward += 0.2
+else:                               # Stance leg floating (BAD)
+    contact_reward -= 0.5
+```
+
+Encourages proper gait execution by rewarding correct contact patterns (swing legs in air, stance legs on ground).
+
+### Stability Penalty
+
+```python
+tilt_penalty = -2.0 * (roll² + pitch² + yaw²)
+```
+
+Penalizes body orientation deviations from upright to maintain stability.
+
+**Total Reward**: Sum of all components
+
+## Termination Conditions
+
+### Terminated (Failure)
+
+Episode terminates early if:
+- `|roll| > π/3` (60°) - robot tipped sideways
+- `|pitch| > π/3` (60°) - robot tipped forward/backward
+
+### Truncated (Timeout)
+
+Episode truncates when `step_count >= max_episode_steps`.
+
+## Usage Examples
+
+### Basic Training Setup
+
+```python
+import numpy as np
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+
+# Create environment
+env = AdaptiveGaitEnv(
+    model_path="model/world_train.xml",
+    residual_scale=0.01,
+    max_episode_steps=10000,
+    settle_steps=100
+)
+
+# Reset and run episode
+obs, info = env.reset(seed=42)
+total_reward = 0.0
+
+for _ in range(1000):
+    # Random policy (replace with trained policy)
+    action = env.action_space.sample()
+    
+    obs, reward, terminated, truncated, info = env.step(action)
+    total_reward += reward
+    
+    if terminated or truncated:
+        print(f"Episode finished with reward: {total_reward}")
+        print(f"Reward breakdown: {info['reward_components']}")
+        break
+```
+
+### With Custom Gait Parameters
+
+```python
+from gait_controller import GaitParameters
+from envs.adaptive_gait_env import AdaptiveGaitEnv
+
+# Define custom initial gait
+custom_gait = GaitParameters(
+    step_height=0.04,
+    step_length=0.08,
+    cycle_time=0.6,
+    body_height=0.06
+)
+
+env = AdaptiveGaitEnv(
+    gait_params=custom_gait,
+    residual_scale=0.015
+)
+
+obs, info = env.reset()
+```
+
+### With Randomization for Robustness
+
+```python
+env = AdaptiveGaitEnv()
+
+# Reset with randomized initial conditions
+obs, info = env.reset(
+    seed=123,
+    options={"randomize": True}
+)
+```
+
+## Parameter Adaptation Scales
+
+The environment defines scaling factors for parameter deltas:
+
+| Parameter | Scale | Range per Step |
+|-----------|-------|----------------|
+| step_height | 0.005 | ±5mm |
+| step_length | 0.005 | ±5mm |
+| cycle_time | 0.05 | ±50ms |
+| body_height | 0.003 | ±3mm |
+
+These scales control the rate at which the policy can adapt gait parameters. Values are tuned to allow meaningful adaptation while preventing unstable rapid changes.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="ResidualWalkEnv" icon="robot" href="./residual-walk-env">
+    Simpler environment with fixed gait parameters
+  </Card>
+  <Card title="GaitController" icon="gear" href="../controllers/diagonal-gait">
+    Base gait control system
+  </Card>
+</CardGroup>

@@ -1,0 +1,378 @@
+---
+title: 'Training Models'
+description: 'Train adaptive gait controllers using PPO reinforcement learning'
+---
+
+## Overview
+
+The `train_adaptive_gait_ppo.py` script trains a PPO (Proximal Policy Optimization) policy that learns to adapt gait parameters and apply residual corrections for robust locomotion on rough terrain.
+
+### What the Policy Learns
+
+<CardGroup cols={2}>
+  <Card title="High-Level Control" icon="sliders">
+    **Gait Parameter Adaptation** (4D)
+    - `step_height` - Foot clearance adjustment
+    - `step_length` - Stride length modulation
+    - `cycle_time` - Gait frequency tuning
+    - `body_height` - Body clearance control
+  </Card>
+  <Card title="Low-Level Control" icon="screwdriver-wrench">
+    **Residual Corrections** (12D)
+    - Fine-grained joint angle adjustments
+    - 3 DOF per leg × 4 legs
+    - Applied on top of base gait
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Navigate to Source Directory">
+    ```bash
+    cd ~/workspace/source
+    ```
+  </Step>
+
+  <Step title="Start Training">
+    Run the training script with default configuration:
+    ```bash
+    python3 train_adaptive_gait_ppo.py
+    ```
+    
+    Training will begin with 84 parallel environments.
+  </Step>
+
+  <Step title="Monitor Progress">
+    Open TensorBoard in a new terminal to visualize training metrics:
+    ```bash
+    tensorboard --logdir runs/
+    ```
+    
+    Navigate to http://localhost:6006 in your browser.
+  </Step>
+
+  <Step title="Wait for Completion">
+    Training runs for 30 million timesteps by default (several hours):
+    - Progress bar shows completion percentage
+    - Checkpoints saved every 500,000 steps
+    - Final model saved at completion
+  </Step>
+</Steps>
+
+## Training Configuration
+
+All hyperparameters are defined in the `TrainingConfig` dataclass (`train_adaptive_gait_ppo.py:42`):
+
+<CodeGroup>
+  ```python Duration & Parallelism
+  total_timesteps = 30_000_000  # 30M total steps
+  n_envs = 84                   # Parallel environments
+  vec_env_backend = "subproc"   # Multi-process execution
+  ```
+
+  ```python PPO Hyperparameters
+  n_steps = 4096           # Steps per policy update
+  batch_size = 2048        # Minibatch size
+  learning_rate = 3e-4     # Adam learning rate
+  gamma = 0.99             # Discount factor
+  gae_lambda = 0.95        # GAE parameter
+  n_epochs = 10            # Optimization epochs per update
+  ent_coef = 0.01          # Entropy bonus coefficient
+  clip_range = 0.2         # PPO clipping parameter
+  max_grad_norm = 1.0      # Gradient clipping
+  ```
+
+  ```python Network Architecture
+  network_size = "large"   # Options: small, medium, large
+  
+  # Large network structure:
+  # Actor (policy):  [512, 256, 128]
+  # Critic (value):  [512, 256, 128]
+  # Activation: ELU
+  ```
+
+  ```python Environment Settings
+  residual_scale = 0.01           # Residual action scaling
+  model_path = "model/world_train.xml"  # Rough terrain
+  max_episode_steps = 60000       # Steps per episode
+  ```
+</CodeGroup>
+
+## Understanding Training Output
+
+When you start training, you'll see:
+
+```bash
+================================================================================
+Adaptive Gait Training Configuration
+================================================================================
+Run name:            adaptive_gait_20260304_143022
+Log directory:       runs/adaptive_gait_20260304_143022
+Total timesteps:     30,000,000
+Parallel envs:       84
+Steps per update:    4096
+Batch size:          2048
+Learning rate:       0.0003
+Entropy coef:        0.01
+N epochs:            10
+Max grad norm:       1.0
+Network size:        large
+Residual scale:      0.01
+Device:              auto
+Vec env backend:     SubprocVecEnv
+================================================================================
+
+Key differences from residual-only training:
+  - Action space: 16D (4 param deltas + 12 residuals)
+  - Observation: 69D (includes current gait params)
+  - Policy learns both high-level and low-level control
+================================================================================
+
+Creating environments...
+
+Network architecture (large):
+  Actor:  [512, 256, 128]
+  Critic: [512, 256, 128]
+  Activation: ELU
+
+Initializing PPO model...
+
+Training details:
+  Steps per iteration:   344,064
+  Updates per iteration: 1,680
+  Total iterations:      87
+  Checkpoint frequency:  Every 500,000 steps
+
+================================================================================
+Starting training...
+================================================================================
+
+Monitor training progress:
+  TensorBoard: tensorboard --logdir runs/adaptive_gait_20260304_143022
+  Checkpoints: runs/adaptive_gait_20260304_143022/checkpoints/
+```
+
+## Monitoring with TensorBoard
+
+<Tabs>
+  <Tab title="Key Metrics">
+    ### Important Graphs to Watch
+    
+    **rollout/ep_rew_mean**
+    - Episode reward (higher is better)
+    - Should increase over time
+    - Indicates learning progress
+    
+    **rollout/ep_len_mean**
+    - Episode length in steps
+    - Longer episodes = more stable walking
+    - Should increase as policy improves
+    
+    **train/entropy_loss**
+    - Policy exploration measure
+    - Decreases as policy becomes more deterministic
+    - Too low too fast = premature convergence
+    
+    **train/policy_gradient_loss**
+    - How much policy is changing
+    - Should decrease and stabilize
+  </Tab>
+
+  <Tab title="Launch Command">
+    ```bash
+    # In a separate terminal
+    cd ~/workspace/source
+    tensorboard --logdir runs/
+    ```
+    
+    Then open http://localhost:6006 in your browser.
+    
+    ### Multi-Run Comparison
+    ```bash
+    # Compare multiple training runs
+    tensorboard --logdir runs/ --port 6006
+    ```
+    
+    TensorBoard will automatically detect all subdirectories in `runs/` and allow side-by-side comparison.
+  </Tab>
+
+  <Tab title="Expected Behavior">
+    ### Successful Training Signs
+    
+    ✅ **Good Progress**
+    - Episode reward increases steadily
+    - Episode length increases (robot survives longer)
+    - Policy loss decreases and stabilizes
+    - Value loss decreases
+    
+    ⚠️ **Potential Issues**
+    - Reward plateaus early (may need more exploration)
+    - Episode length stays low (robot falling frequently)
+    - High variance in rewards (may need to reduce learning rate)
+  </Tab>
+</Tabs>
+
+## Training Outputs
+
+After training completes, you'll find these artifacts in `runs/adaptive_gait_YYYYMMDD_HHMMSS/`:
+
+<AccordionGroup>
+  <Accordion title="final_model.zip">
+    The trained PPO policy weights. Use this file to run the trained robot:
+    ```bash
+    python3 play_adaptive_policy.py \
+        --model runs/adaptive_gait_20260304_143022/final_model.zip \
+        --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+        --seconds 30 \
+        --deterministic
+    ```
+  </Accordion>
+
+  <Accordion title="vec_normalize.pkl">
+    Observation and reward normalization statistics. Required for inference:
+    - Mean and standard deviation of observations
+    - Running reward statistics
+    - Must be loaded with the model for correct behavior
+  </Accordion>
+
+  <Accordion title="checkpoints/">
+    Intermediate model saves every 500,000 steps:
+    ```
+    checkpoints/
+    ├── rl_model_500000_steps.zip
+    ├── rl_model_1000000_steps.zip
+    ├── rl_model_1500000_steps.zip
+    └── ...
+    ```
+    Useful for:
+    - Recovering from training interruptions
+    - Comparing policy evolution over time
+    - Finding the best checkpoint if training diverges
+  </Accordion>
+
+  <Accordion title="monitor_*.csv">
+    Per-environment episode statistics (one file per parallel environment):
+    ```csv
+    r,l,t
+    1234.56,5000,123.45
+    1456.78,6000,234.56
+    ```
+    - `r`: Episode reward
+    - `l`: Episode length (steps)
+    - `t`: Wall-clock time (seconds)
+  </Accordion>
+
+  <Accordion title="config.txt">
+    Complete training configuration for reproducibility:
+    ```
+    Adaptive Gait Training Configuration
+    ========================================
+    total_timesteps: 30000000
+    n_envs: 84
+    n_steps: 4096
+    batch_size: 2048
+    learning_rate: 0.0003
+    ...
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Customizing Training
+
+To modify training parameters, edit the `TrainingConfig` dataclass in `train_adaptive_gait_ppo.py:42`:
+
+<CodeGroup>
+  ```python Faster Training (Less Quality)
+  total_timesteps = 10_000_000  # Reduce from 30M
+  n_envs = 16                   # Fewer parallel envs
+  network_size = "medium"       # Smaller network
+  ```
+
+  ```python Higher Quality (Slower)
+  total_timesteps = 50_000_000  # More experience
+  n_envs = 128                  # More parallelism
+  learning_rate = 1e-4          # More conservative
+  network_size = "large"        # Keep large
+  ```
+
+  ```python CPU-Only Training
+  device = "cpu"                # Force CPU
+  n_envs = 8                    # Reduce parallelism
+  vec_env_backend = "dummy"     # Single-process
+  ```
+</CodeGroup>
+
+## Expected Training Time
+
+With default configuration (30M timesteps, 84 environments):
+
+| Hardware | Approximate Time |
+|----------|------------------|
+| 32+ CPU cores | 4-6 hours |
+| 16 CPU cores | 8-12 hours |
+| 8 CPU cores | 16-24 hours |
+
+<Note>
+  Training time scales with `total_timesteps / (n_envs × wall_clock_speed)`. More parallel environments significantly reduce training time.
+</Note>
+
+## Testing the Trained Policy
+
+After training completes:
+
+<Steps>
+  <Step title="Run Trained Policy">
+    ```bash
+    python3 play_adaptive_policy.py \
+        --model runs/adaptive_gait_20260304_143022/final_model.zip \
+        --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+        --seconds 30 \
+        --deterministic
+    ```
+  </Step>
+
+  <Step title="Compare with Baseline">
+    See the [Baseline vs Adaptive](./baseline-vs-adaptive) guide for detailed comparison workflow.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Out of Memory Error">
+    Reduce memory usage:
+    ```python
+    n_envs = 16          # Reduce from 84
+    n_steps = 2048       # Reduce from 4096
+    network_size = "medium"  # Reduce from "large"
+    ```
+  </Accordion>
+
+  <Accordion title="Training Crashes or Hangs">
+    Switch to single-process mode for debugging:
+    ```python
+    vec_env_backend = "dummy"
+    n_envs = 1
+    ```
+    This makes errors easier to trace.
+  </Accordion>
+
+  <Accordion title="Policy Not Learning">
+    Check:
+    - Episode length remains very low → environment may be too difficult
+    - Reward not increasing → try reducing learning rate
+    - High variance → increase `n_envs` for more stable gradients
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Compare Performance" icon="chart-line" href="./baseline-vs-adaptive">
+    Quantitatively compare baseline vs trained policy
+  </Card>
+  <Card title="Deploy to Robot" icon="robot" href="./ros2-integration">
+    Use the trained policy with ROS2 integration
+  </Card>
+</CardGroup>

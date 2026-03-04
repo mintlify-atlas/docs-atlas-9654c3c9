@@ -1,0 +1,271 @@
+---
+title: Gait Control
+description: Diagonal trot gait implementation with Bézier swing trajectories and state machine coordination
+---
+
+## Overview
+
+The robot implements a **diagonal trot gait** using a state machine that coordinates **diagonal leg pairs** in alternating swing and stance phases. Foot trajectories are generated using **cubic Bézier curves** for smooth, natural swing motion.
+
+<Info>
+The diagonal trot is a dynamic gait where diagonal pairs of legs move together (FL+RR, FR+RL), providing excellent stability while enabling efficient forward locomotion.
+</Info>
+
+## Gait Parameters
+
+From `gait_controller.py:18-33`, the default configuration is:
+
+```python
+@dataclass
+class GaitParameters:
+    body_height: float = 0.07        # 70mm nominal stance height
+    step_length: float = 0.05        # 50mm stride length
+    step_height: float = 0.015       # 15mm ground clearance
+    cycle_time: float = 0.8          # 800ms per complete cycle
+    swing_shape: float = 0.35        # Bézier curve shape parameter
+    lateral_offsets: Dict[str, float]  # Per-leg y-axis offsets
+```
+
+### Parameter Details
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `body_height` | 0.07 m | 0.02-0.10 m | Distance from body to ground |
+| `step_length` | 0.05 m | 0.02-0.08 m | Forward/backward stride |
+| `step_height` | 0.015 m | 0.005-0.03 m | Maximum foot lift during swing |
+| `cycle_time` | 0.8 s | 0.4-1.5 s | Duration of full gait cycle |
+| `swing_shape` | 0.35 | 0.05-0.95 | Bézier control point position |
+
+<Note>
+These parameters can be **adapted online** by the reinforcement learning controller to optimize performance on different terrains. See [Reinforcement Learning](/concepts/reinforcement-learning) for details.
+</Note>
+
+## Diagonal Trot State Machine
+
+### Leg Pairs
+
+From `gait_controller.py:10-14`:
+
+```python
+LEG_NAMES = ("FL", "FR", "RL", "RR")  # Front-Left, Front-Right, etc.
+
+DIAGONAL_PAIRS = {
+    "pair_a": ("FL", "RR"),  # Front-left + Rear-right
+    "pair_b": ("FR", "RL"),  # Front-right + Rear-left
+}
+```
+
+### State Transitions
+
+The gait uses a two-state machine implemented with the `transitions` library:
+
+```python
+states = ["pair_a_swing", "pair_b_swing"]
+```
+
+**State 1: pair_a_swing**
+- FL and RR legs in **swing phase** (lifting and moving forward)
+- FR and RL legs in **stance phase** (supporting body weight, pushing)
+- Duration: `cycle_time / 2` (e.g., 400ms)
+
+**State 2: pair_b_swing**
+- FR and RL legs in **swing phase**
+- FL and RR legs in **stance phase**
+- Duration: `cycle_time / 2` (e.g., 400ms)
+
+<Accordion title="State Machine Implementation Details">
+From `gait_controller.py:49-58`, the controller sets up automatic transitions:
+
+```python
+self.machine = Machine(
+    model=self,
+    states=self.states,
+    initial="pair_a_swing",
+    after_state_change="_update_active_pair",
+    send_event=True,
+)
+self.machine.add_transition("toggle_pair", "pair_a_swing", "pair_b_swing")
+self.machine.add_transition("toggle_pair", "pair_b_swing", "pair_a_swing")
+```
+
+The `toggle_pair` event is triggered automatically when `phase_elapsed >= state_duration`.
+</Accordion>
+
+## Swing Phase Trajectory
+
+Swing phase uses a **cubic Bézier curve** for smooth, natural foot motion.
+
+### Bézier Curve Construction
+
+From `gait_controller.py:106-119`:
+
+```python
+def _build_swing_curve(self) -> None:
+    """Pre-compute a cubic Bézier curve for the swing phase."""
+    half_step = self.params.step_length / 2.0
+    lift_height = max(self.params.body_height - self.params.step_height, 1e-4)
+    shape = np.clip(self.params.swing_shape, 0.05, 0.95)
+    
+    nodes = np.asfortranarray([
+        [-half_step, -half_step * shape, half_step * shape, half_step],
+        [0.0, 0.0, 0.0, 0.0],
+        [self.params.body_height, lift_height, lift_height, self.params.body_height],
+    ])
+    self.swing_curve = bezier.Curve(nodes, degree=3)
+```
+
+### Control Points
+
+For default parameters (step_length=0.05m, step_height=0.015m, body_height=0.07m):
+
+| Point | X | Y | Z | Description |
+|-------|---|---|---|-------------|
+| P0 | -0.025 | 0 | 0.070 | Start (rear touchdown) |
+| P1 | -0.00875 | 0 | 0.055 | First control point |
+| P2 | +0.00875 | 0 | 0.055 | Second control point |
+| P3 | +0.025 | 0 | 0.070 | End (forward touchdown) |
+
+<Info>
+The `swing_shape` parameter (default 0.35) controls how quickly the foot lifts. Lower values create a more aggressive lift, higher values create a gentler arc.
+</Info>
+
+### Trajectory Evaluation
+
+From `gait_controller.py:121-125`:
+
+```python
+def _evaluate_swing_curve(self, leg: str, tau: float) -> np.ndarray:
+    """Evaluate the swing curve for a given leg."""
+    tau_clamped = float(np.clip(tau, 0.0, 1.0))
+    point = self.swing_curve.evaluate(tau_clamped).flatten()
+    return self._apply_lateral_offset(leg, point)
+```
+
+The parameter `tau` ranges from 0.0 to 1.0 over the swing duration, smoothly interpolating the Bézier curve.
+
+## Stance Phase Trajectory
+
+Stance phase uses a **linear sweep** from front to rear, simulating ground contact and body propulsion.
+
+### Linear Motion
+
+From `gait_controller.py:127-133`:
+
+```python
+def _evaluate_stance_path(self, leg: str, tau: float) -> np.ndarray:
+    """Linearly sweep the stance foot from front to rear."""
+    tau_clamped = float(np.clip(tau, 0.0, 1.0))
+    half_step = self.params.step_length / 2.0
+    x_pos = half_step - (self.params.step_length * tau_clamped)
+    stance_point = np.array([x_pos, 0.0, self.params.body_height], dtype=float)
+    return self._apply_lateral_offset(leg, stance_point)
+```
+
+**Stance trajectory**:
+- τ = 0.0: x = +0.025m (forward position)
+- τ = 0.5: x = 0.0m (under body center)
+- τ = 1.0: x = -0.025m (rear position)
+
+Z remains constant at `body_height` (0.07m) throughout stance, maintaining ground contact.
+
+<Note>
+The constant Z-height assumption works well on flat terrain. On rough terrain, the RL controller adds residual corrections to adapt to surface irregularities.
+</Note>
+
+## Gait Update Loop
+
+From `gait_controller.py:67-87`, the main control loop:
+
+```python
+def update(self, dt: float) -> Dict[str, np.ndarray]:
+    """Advance the gait by dt seconds and return per-leg foot targets."""
+    if dt <= 0.0:
+        return self._leg_targets
+    
+    self.phase_elapsed += dt
+    while self.phase_elapsed >= self.state_duration:
+        self.phase_elapsed -= self.state_duration
+        self.toggle_pair()  # Switch between pair_a_swing and pair_b_swing
+    
+    phase = np.clip(self.phase_elapsed / self.state_duration, 0.0, 1.0)
+    targets: Dict[str, np.ndarray] = {}
+    
+    for leg in self.active_swing_pair:
+        targets[leg] = self._evaluate_swing_curve(leg, phase)
+    
+    for leg in self.active_stance_pair:
+        targets[leg] = self._evaluate_stance_path(leg, phase)
+    
+    self._leg_targets = targets
+    return targets
+```
+
+### Execution Flow
+
+1. **Accumulate time**: Add simulation timestep to phase counter
+2. **Check transition**: If phase exceeds half-cycle duration, toggle pairs
+3. **Compute phase**: Normalize elapsed time to [0, 1] range
+4. **Generate targets**: Evaluate Bézier (swing) or linear (stance) for each leg
+5. **Return targets**: Foot positions sent to IK solver
+
+## Coordinate Frames
+
+<Accordion title="Understanding the coordinate system">
+From README.md:290-294:
+
+**IK leg frame**:
+- X: Forward (toward front of robot)
+- Y: Lateral (left/right)
+- Z: **Downward** (gravity direction)
+
+**Gait controller frame**:
+- X: Forward with `FORWARD_SIGN = -1.0` applied during IK
+- Y: Lateral offsets for leg spacing
+- Z: Height above ground (positive = higher)
+
+The sign inversion (`FORWARD_SIGN = -1.0`) ensures gait coordinates match the IK solver's convention where Z points down.
+</Accordion>
+
+## Lateral Offsets
+
+From `gait_controller.py:135-140`:
+
+```python
+def _apply_lateral_offset(self, leg: str, point: np.ndarray) -> np.ndarray:
+    """Shift the foot target by the configured lateral offset."""
+    lateral = self.params.lateral_offsets.get(leg, 0.0)
+    adjusted = point.copy()
+    adjusted[1] = lateral
+    return adjusted
+```
+
+Lateral offsets adjust the Y-coordinate for each leg, allowing:
+- **Wider stance** for increased stability
+- **Track width adjustment** for narrow passages
+- **Asymmetric gaits** for turning maneuvers
+
+## Performance Characteristics
+
+### Flat Terrain (Baseline)
+
+From the comparison test results:
+- **Distance traveled**: ~0.5 m in 17 seconds
+- **Average velocity**: ~0.03 m/s
+- **Gait stability**: Excellent (minimal roll/pitch)
+
+### Rough Terrain (Baseline)
+
+Performance degrades significantly:
+- **Distance traveled**: ~0.3 m in 17 seconds
+- **Average velocity**: ~0.018 m/s
+- **Performance drop**: ~40% compared to flat terrain
+
+<Info>
+The baseline gait controller is **purely kinematic** with no sensory feedback. On rough terrain, this causes efficiency loss as the rigid trajectories cannot adapt to surface variations. See [Reinforcement Learning](/concepts/reinforcement-learning) for adaptive solutions.
+</Info>
+
+## Related Topics
+
+- [Inverse Kinematics](/concepts/inverse-kinematics) - Converting foot targets to joint angles
+- [Robot Design](/concepts/robot-design) - Hardware constraints affecting gait design
+- [Reinforcement Learning](/concepts/reinforcement-learning) - Learning adaptive gait modifications

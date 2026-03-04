@@ -1,0 +1,349 @@
+---
+title: "play_adaptive_policy.py"
+description: "Visualize and evaluate trained adaptive gait policies in MuJoCo viewer"
+---
+
+## Overview
+
+This script loads a trained adaptive gait policy and runs it in the MuJoCo viewer with real-time visualization of gait parameter adaptations. It supports both trained policies and baseline (pure gait controller without residuals) for comparison.
+
+**Key Features:**
+- Real-time visualization in MuJoCo viewer
+- Live gait parameter monitoring in console
+- Trajectory recording to JSON
+- Baseline comparison mode
+- Pause/resume simulation with spacebar
+- Fullscreen support for presentations
+
+## Basic Usage
+
+### Evaluate Trained Policy
+
+```bash
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 30 \
+    --deterministic
+```
+
+### Run Baseline (No Residuals)
+
+```bash
+python3 play_adaptive_policy.py --baseline --seconds 30
+```
+
+## Command-Line Arguments
+
+### Model Loading
+
+<ParamField path="--model" type="str" default="None">
+  Path to trained model file (`.zip`). Required unless `--baseline` is set.
+  
+  **Example**: `runs/adaptive_gait_20260304_143022/final_model.zip`
+</ParamField>
+
+<ParamField path="--normalize" type="str" default="None">
+  Path to VecNormalize statistics file (`.pkl`). Highly recommended for policies trained with observation normalization.
+  
+  Without this file, the policy will receive unnormalized observations and likely perform poorly.
+  
+  **Example**: `runs/adaptive_gait_20260304_143022/vec_normalize.pkl`
+</ParamField>
+
+### Simulation Control
+
+<ParamField path="--seconds" type="float" default="30.0">
+  Duration to run simulation in seconds (wall-clock time).
+  
+  **Example**: `--seconds 60` for 1 minute of playback
+</ParamField>
+
+<ParamField path="--deterministic" type="flag">
+  Use deterministic actions (mean of policy distribution) instead of sampling. Recommended for evaluation to reduce stochasticity.
+</ParamField>
+
+<ParamField path="--no-reset" type="flag">
+  Disable automatic environment reset on episode termination. Useful for visualization when you want to freeze on failure state.
+</ParamField>
+
+### Environment Configuration
+
+<ParamField path="--flat" type="flag">
+  Use flat terrain (`model/world.xml`) instead of rough terrain (`model/world_train.xml`). Useful for testing policy on easier terrain.
+</ParamField>
+
+<ParamField path="--baseline" type="flag">
+  Run baseline mode with zero actions (pure gait controller without residuals). Use this to compare against the learned policy.
+  
+  When set, `--model` is not required.
+</ParamField>
+
+### Visualization Options
+
+<ParamField path="--fullscreen" type="flag">
+  Start viewer in fullscreen mode. Requires GLFW backend (`MUJOCO_GL=glfw`). Falls back to maximized window if fullscreen unavailable.
+  
+  Hides left and right UI panels for cleaner presentation view.
+</ParamField>
+
+### Data Recording
+
+<ParamField path="--save-trajectory" type="str" default="None">
+  Save trajectory data (time, x, y, z position) to JSON file.
+  
+  **Example**: `--save-trajectory outputs/trajectory.json`
+  
+  Output format:
+  ```json
+  {
+    "mode": "adaptive",
+    "duration": 30.5,
+    "total_steps": 6100,
+    "trajectory": [
+      {"time": 0.0, "x": 0.0, "y": 0.0, "z": 0.08},
+      {"time": 0.005, "x": 0.001, "y": 0.0, "z": 0.081},
+      ...
+    ]
+  }
+  ```
+</ParamField>
+
+## Interactive Controls
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| **Space** | Pause/unpause simulation |
+| **ESC** | Close viewer and exit |
+
+Standard MuJoCo viewer controls:
+- **Mouse drag**: Rotate camera
+- **Right-click drag**: Pan camera
+- **Scroll wheel**: Zoom in/out
+- **Double-click**: Select body for tracking
+
+## Console Output
+
+### Real-Time Gait Parameters
+
+The script prints current gait parameters every 1 second:
+
+```
+[t=5.0s] Gait params: step_h=0.0520m, step_l=0.0680m, cycle_t=0.850s, body_h=0.0495m
+[t=6.0s] Gait params: step_h=0.0532m, step_l=0.0665m, cycle_t=0.870s, body_h=0.0490m
+[t=7.0s] Gait params: step_h=0.0548m, step_l=0.0652m, cycle_t=0.890s, body_h=0.0485m
+```
+
+### Episode Termination
+
+When the robot tips over or reaches max steps:
+
+```
+============================================================
+[t=12.3s] EPISODE TERMINATED after 2460 steps
+============================================================
+  Orientation (pre-step):
+    Roll:   -65.32° (limit: ±60°)
+    Pitch:   12.45° (limit: ±60°)
+    Yaw:     45.67°
+  Termination reason: ROBOT TIPPED OVER
+    → Roll exceeded limit (-65.3° > 60°)
+  Body position: x=3.245m, y=0.123m, z=0.045m
+  Linear velocity: x=0.234m/s, y=-0.012m/s, z=-0.089m/s
+  Active gait params:
+    step_height=0.0548m, step_length=0.0652m
+    cycle_time=0.890s, body_height=0.0485m
+============================================================
+```
+
+### Final Statistics
+
+At the end of playback:
+
+```
+================================================================================
+Playback complete!
+================================================================================
+Total steps: 6000
+Duration:    30.0s
+
+Final Robot State:
+----------------------------------------
+Position:        x=8.456m, y=0.234m, z=0.052m
+Linear velocity: x=0.312m/s, y=0.001m/s, z=0.002m/s
+Orientation:     roll=2.34°, pitch=-1.23°, yaw=0.56°
+
+Gait Parameter Statistics:
+----------------------------------------
+step_height    : mean=0.0489, std=0.0052, min=0.0420, max=0.0580
+step_length    : mean=0.0663, std=0.0031, min=0.0610, max=0.0720
+cycle_time     : mean=0.8520, std=0.0420, min=0.7800, max=0.9500
+body_height    : mean=0.0498, std=0.0012, min=0.0475, max=0.0520
+
+Interpretation:
+  - Large std indicates adaptive behavior (good for rough terrain)
+  - Small std indicates policy relies mostly on base parameters
+  - Compare with base gait params to see adaptation magnitude
+```
+
+## Example Workflows
+
+### 1. Quick Policy Test (30 seconds)
+
+```bash
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 30 \
+    --deterministic
+```
+
+### 2. Compare Policy vs. Baseline
+
+```bash
+# Run trained policy
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 60 \
+    --deterministic \
+    --save-trajectory policy_traj.json
+
+# Run baseline
+python3 play_adaptive_policy.py \
+    --baseline \
+    --seconds 60 \
+    --save-trajectory baseline_traj.json
+
+# Compare trajectories
+python3 compare_trajectories.py policy_traj.json baseline_traj.json
+```
+
+### 3. Test on Flat Terrain
+
+```bash
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --flat \
+    --seconds 60 \
+    --deterministic
+```
+
+### 4. Fullscreen Demo for Presentation
+
+```bash
+MUJOCO_GL=glfw python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --fullscreen \
+    --seconds 120 \
+    --deterministic
+```
+
+### 5. Record Long Trajectory
+
+```bash
+python3 play_adaptive_policy.py \
+    --model runs/adaptive_gait_20260304_143022/final_model.zip \
+    --normalize runs/adaptive_gait_20260304_143022/vec_normalize.pkl \
+    --seconds 300 \
+    --deterministic \
+    --save-trajectory long_run.json
+```
+
+## Interpreting Gait Adaptation
+
+### Step Height (`step_height`)
+
+- **Baseline**: ~0.040m
+- **Expected adaptation**: Increases on rough terrain (0.045-0.060m) to clear obstacles
+- **High std (&gt;0.005m)**: Policy actively modulating step height ✓
+- **Low std (&lt;0.002m)**: Policy not using adaptive behavior ✗
+
+### Step Length (`step_length`)
+
+- **Baseline**: ~0.060m
+- **Expected adaptation**: Decreases on rough terrain for stability, increases on flat terrain for speed
+- **Typical range**: 0.050-0.075m
+
+### Cycle Time (`cycle_time`)
+
+- **Baseline**: ~0.800s
+- **Expected adaptation**: Increases (slower gait) on difficult terrain for stability
+- **Typical range**: 0.700-1.000s
+
+### Body Height (`body_height`)
+
+- **Baseline**: ~0.050m
+- **Expected adaptation**: Small adjustments for stability and obstacle clearance
+- **Typical range**: 0.045-0.055m
+
+## Troubleshooting
+
+### Policy Performs Poorly
+
+**Problem**: Robot tips over immediately or behaves erratically.
+
+**Solutions**:
+1. Ensure `--normalize` points to the correct `.pkl` file from training
+2. Check that model and normalization stats are from the same training run
+3. Try `--flat` to test on easier terrain
+4. Compare with `--baseline` to verify environment setup
+
+### Viewer Not Opening
+
+**Problem**: Script runs but no window appears.
+
+**Solutions**:
+1. Check `DISPLAY` environment variable is set (Linux)
+2. Try different backend: `MUJOCO_GL=glfw` or `MUJOCO_GL=osmesa`
+3. Verify MuJoCo installation: `python -c "import mujoco; print(mujoco.__version__)"`
+
+### Fullscreen Not Working
+
+**Problem**: `--fullscreen` falls back to windowed mode.
+
+**Solutions**:
+1. Set backend explicitly: `MUJOCO_GL=glfw python3 play_adaptive_policy.py ...`
+2. Check if running in headless environment (fullscreen requires display)
+3. Use maximized window fallback (automatic)
+
+## Output Files
+
+### Trajectory JSON
+
+When using `--save-trajectory`, the output file contains:
+
+```json
+{
+  "mode": "adaptive",           // "adaptive" or "baseline"
+  "duration": 30.5,              // Wall-clock seconds
+  "total_steps": 6100,           // Simulation steps
+  "trajectory": [                // Position samples
+    {
+      "time": 0.0,               // Elapsed time (seconds)
+      "x": 0.0,                  // X position (meters)
+      "y": 0.0,                  // Y position (meters)
+      "z": 0.08                  // Z position (meters)
+    },
+    // ... one entry per simulation step
+  ]
+}
+```
+
+### Use Cases for Trajectory Data
+
+1. **Distance traveled**: Compute `sqrt((x_final - x_start)^2 + (y_final - y_start)^2)`
+2. **Average speed**: Distance / duration
+3. **Path visualization**: Plot (x, y) trajectory
+4. **Stability analysis**: Check Z position variance
+5. **Policy comparison**: Compare trajectories from different checkpoints
+
+## See Also
+
+- [train_adaptive_gait_ppo.py](/api/training/train-adaptive-gait) - Training script
+- [AdaptiveGaitEnv](/api/environments/adaptive-gait-env) - Environment documentation
+- [DiagonalGaitController](/api/controllers/diagonal-gait) - Gait controller reference

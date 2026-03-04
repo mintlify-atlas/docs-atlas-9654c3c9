@@ -1,0 +1,422 @@
+---
+title: Reinforcement Learning
+description: PPO-based adaptive control using residual learning and gait parameter modulation
+---
+
+## Overview
+
+The robot employs **Proximal Policy Optimization (PPO)** reinforcement learning to adapt its gait for rough terrain locomotion. The learned controller adds **residual corrections** to a baseline kinematic gait, enabling robust performance on irregular surfaces.
+
+<Info>
+This approach combines the stability of hand-designed gaits with the adaptability of learned policies, achieving the best of both worlds.
+</Info>
+
+## Two Learning Approaches
+
+The codebase supports two RL strategies:
+
+### 1. Residual Learning (Original)
+
+Learn **low-level corrections** to baseline foot trajectories:
+- Baseline gait controller generates nominal foot positions
+- Policy outputs 3D offset vectors per leg (12D action)
+- Total action space: 12 dimensions
+
+### 2. Adaptive Gait Learning (Extended)
+
+Learn **both high-level parameters and low-level residuals**:
+- Policy modulates gait parameters (step height, length, cycle time, body height)
+- Policy adds per-leg residual corrections
+- Total action space: 16 dimensions (4 params + 12 residuals)
+
+From `envs/adaptive_gait_env.py:1-10`:
+
+```python
+"""Gymnasium environment for adaptive gait + residual learning.
+
+This extends ResidualWalkEnv to support online gait parameter adaptation.
+The policy learns to modulate both:
+1. High-level gait parameters (step_height, step_length, cycle_time, body_height)
+2. Low-level residual corrections (per-leg foot offsets)
+
+This approach enables better adaptation to rough terrain by learning when to
+take higher steps, adjust stride length, change gait frequency, etc.
+"""
+```
+
+<Note>
+This documentation focuses on the **Adaptive Gait Learning** approach (AdaptiveGaitEnv), which is the more advanced method.
+</Note>
+
+## PPO Algorithm
+
+**Proximal Policy Optimization** (Schulman et al., 2017) is used via **Stable Baselines 3**.
+
+From README.md:5:
+
+```
+Simulación de robot cuadrúpedo 12DOF con MuJoCo, Gymnasium, ROS2 
+y aprendizaje por refuerzo profundo PPO (StableBaseline3)
+```
+
+### Why PPO?
+
+✅ **Sample efficient**: Learns from fewer environment interactions
+
+✅ **Stable training**: Clipped objective prevents destructive policy updates
+
+✅ **On-policy**: Suitable for continuous control with changing dynamics
+
+✅ **Proven track record**: State-of-art for robotic locomotion tasks
+
+<Accordion title="PPO Key Concepts">
+**Clipped Surrogate Objective**:
+```
+L(θ) = E[min(r(θ)·A, clip(r(θ), 1-ε, 1+ε)·A)]
+```
+Where:
+- `r(θ)` = probability ratio (new policy / old policy)
+- `A` = advantage estimate (how much better than expected)
+- `ε` = clip parameter (typically 0.2)
+
+This prevents the policy from changing too drastically between updates, ensuring stable learning.
+</Accordion>
+
+## Observation Space (69D)
+
+From `envs/adaptive_gait_env.py:62-68`:
+
+```python
+"""Observation (69D):
+- body pos(3), quat(4), lin vel(3), ang vel(3)  [13D]
+- joint pos/vel(24)                              [24D]
+- foot pos(12), foot vel(12)                     [24D]
+- foot contacts(4)                               [4D]
+- current gait parameters(4)                     [4D]
+"""
+```
+
+### Observation Components
+
+#### Body State (13D)
+
+From `envs/adaptive_gait_env.py:165-173`:
+
+```python
+# Body state
+body_state = self.sensor_reader.get_body_state()
+pos, quat, linvel, angvel = np.split(body_state, [3, 7, 10])
+quat = quat / max(1e-9, np.linalg.norm(quat))  # Normalize quaternion
+
+obs_components.append(pos)       # [x, y, z] position
+obs_components.append(quat)      # [w, x, y, z] orientation
+obs_components.append(linvel)    # [vx, vy, vz] linear velocity
+obs_components.append(angvel)    # [ωx, ωy, ωz] angular velocity
+```
+
+#### Joint States (24D)
+
+All 12 joints (3 per leg × 4 legs):
+- 12D joint positions (angles in radians)
+- 12D joint velocities (angular velocity in rad/s)
+
+#### Foot Information (24D)
+
+From `envs/adaptive_gait_env.py:179-183`:
+
+```python
+# Foot positions and velocities
+foot_positions = self.sensor_reader.get_foot_positions()    # 12D
+obs_components.append(foot_positions)
+foot_velocities = self.sensor_reader.get_foot_velocities()  # 12D
+obs_components.append(foot_velocities)
+```
+
+#### Foot Contacts (4D)
+
+Binary indicators (0.0 or 1.0) for ground contact per leg.
+
+From `envs/adaptive_gait_env.py:186-188`:
+
+```python
+foot_contacts = self._get_foot_contact_forces()
+contact_array = np.array([foot_contacts[leg] for leg in LEG_NAMES], dtype=float)
+obs_components.append(contact_array)
+```
+
+#### Current Gait Parameters (4D)
+
+Normalized values of current gait configuration:
+
+From `envs/adaptive_gait_env.py:190-205`:
+
+```python
+# Current gait parameters (normalized to [-1, 1] range)
+current_params = self.controller.get_current_parameters()
+ranges = self.controller.param_ranges
+
+param_obs = []
+for param_name in ["step_height", "step_length", "cycle_time", "body_height"]:
+    min_val, max_val, _ = ranges[param_name]
+    center = (min_val + max_val) / 2.0
+    scale = (max_val - min_val) / 2.0
+    normalized = (current_params[param_name] - center) / scale
+    param_obs.append(normalized)
+
+obs_components.append(np.array(param_obs, dtype=float))
+```
+
+This gives the policy **proprioceptive feedback** about its own gait settings.
+
+## Action Space (16D)
+
+From `envs/adaptive_gait_env.py:70-73` and `121-125`:
+
+```python
+"""Action (16D):
+- gait parameter deltas(4): [d_step_height, d_step_length, d_cycle_time, d_body_height]
+- residuals per leg(12): 3D offset per leg in [-1, 1] scaled by residual_scale
+"""
+
+# Action space definition
+self.action_space = gym.spaces.Box(
+    low=-1.0, high=1.0, shape=(16,), dtype=np.float32
+)
+```
+
+### Action Processing
+
+From `envs/adaptive_gait_env.py:212-237`:
+
+```python
+def _process_action(self, action: np.ndarray) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
+    act = np.asarray(action, dtype=float).clip(-1.0, 1.0)
+    
+    # First 4 values are parameter deltas
+    param_raw = act[:4]
+    param_deltas = {
+        "step_height": param_raw[0] * self.PARAM_DELTA_SCALES["step_height"],
+        "step_length": param_raw[1] * self.PARAM_DELTA_SCALES["step_length"],
+        "cycle_time": param_raw[2] * self.PARAM_DELTA_SCALES["cycle_time"],
+        "body_height": param_raw[3] * self.PARAM_DELTA_SCALES["body_height"],
+    }
+    
+    # Remaining 12 values are residuals
+    residuals: Dict[str, np.ndarray] = {}
+    for i, leg in enumerate(LEG_NAMES):
+        residuals[leg] = act[4 + i * 3 : 4 + (i + 1) * 3] * self.residual_scale
+    
+    return param_deltas, residuals
+```
+
+### Action Scaling
+
+From `envs/adaptive_gait_env.py:77-83`:
+
+```python
+PARAM_DELTA_SCALES = {
+    "step_height": 0.005,   # ±5mm per step
+    "step_length": 0.005,   # ±5mm per step
+    "cycle_time": 0.05,     # ±50ms per step
+    "body_height": 0.003,   # ±3mm per step
+}
+```
+
+Actions are in `[-1, +1]` and scaled to reasonable parameter adjustments:
+- **step_height**: Action of +1.0 → +5mm increase per timestep
+- **residuals**: Action of +1.0 → +10mm offset (if `residual_scale=0.01`)
+
+<Info>
+These scales are **per timestep**, not per episode. Parameters accumulate changes over time, with limits enforced by the controller.
+</Info>
+
+## Reward Function
+
+From `envs/adaptive_gait_env.py:259-300`:
+
+```python
+def _compute_reward(self) -> Tuple[float, Dict[str, float]]:
+    """Compute reward focused on forward velocity and gait quality."""
+    rewards: Dict[str, float] = {}
+    
+    # 1. Forward velocity reward
+    linvel = self.sensor_reader.read_sensor("body_linvel")
+    forward_vel = float(linvel[0])
+    lateral_vel = float(linvel[1])
+    
+    rewards["forward_velocity"] = 2000.0 * forward_vel
+    rewards["lateral_velocity_penalty"] = -2.0 * abs(lateral_vel)
+    
+    # 2. Foot contact pattern
+    foot_contacts = self._get_foot_contact_forces()
+    swing_flags = self.controller.get_swing_stance_flags()
+    contact_reward = 0.0
+    for leg in LEG_NAMES:
+        is_swing = int(swing_flags[leg]) == 1
+        has_contact = foot_contacts[leg] > 0.5
+        if is_swing and has_contact:
+            contact_reward -= 0.5
+        elif is_swing and not has_contact:
+            contact_reward += 0.2
+        elif (not is_swing) and has_contact:
+            contact_reward += 0.2
+        else:
+            contact_reward -= 0.5
+    rewards["contact_pattern"] = float(contact_reward)
+    
+    # 3. Stability
+    quat = self.sensor_reader.get_body_quaternion()
+    roll, pitch, yaw = quat_to_euler(quat, True)
+    tilt_penalty = roll * roll + pitch * pitch + yaw * yaw
+    rewards["stability"] = -2.0 * float(tilt_penalty)
+    
+    total = float(sum(rewards.values()))
+    return total, rewards
+```
+
+### Reward Components
+
+1. **Forward velocity** (primary objective)
+   - Weight: 2000.0× forward velocity (m/s)
+   - Encourages fast locomotion in +X direction
+
+2. **Lateral velocity penalty**
+   - Weight: -2.0× |lateral velocity|
+   - Discourages sideways drift
+
+3. **Contact pattern reward**
+   - +0.2 for correct swing (no contact) or stance (has contact)
+   - -0.5 for incorrect foot state
+   - Encourages maintaining proper diagonal trot
+
+4. **Stability penalty**
+   - Weight: -2.0× (roll² + pitch² + yaw²)
+   - Penalizes body orientation deviations
+
+<Note>
+The reward is **dense** (received every timestep), not sparse. This helps PPO learn faster by providing continuous feedback about policy quality.
+</Note>
+
+## Termination Conditions
+
+From `envs/adaptive_gait_env.py:302-311`:
+
+```python
+def _check_termination(self) -> Tuple[bool, bool]:
+    """Return (terminated, truncated)."""
+    quat = self.sensor_reader.get_body_quaternion()
+    roll, pitch, _ = quat_to_euler(quat, False)
+    terminated = bool(
+        (abs(roll) > math.pi / 3)   # >60° roll
+        or (abs(pitch) > math.pi / 3)  # >60° pitch
+    )
+    truncated = bool(self.step_count >= self.max_episode_steps)
+    return terminated, truncated
+```
+
+- **Terminated**: Robot falls over (roll/pitch > 60°)
+- **Truncated**: Episode reaches maximum length (default 60,000 steps)
+
+## Training Environment
+
+From `envs/adaptive_gait_env.py:85-114`:
+
+```python
+def __init__(
+    self,
+    model_path: str = "model/world_train.xml",  # Rough terrain
+    gait_params: Optional[GaitParameters] = None,
+    residual_scale: float = 0.01,
+    max_episode_steps: int = 60000,
+    settle_steps: int = 0,
+    seed: Optional[int] = None,
+) -> None:
+```
+
+### Key Configuration
+
+- **model_path**: `world_train.xml` contains rough terrain with heightfield
+- **residual_scale**: 0.01 m (10mm) maximum residual correction
+- **max_episode_steps**: 60,000 steps ≈ 30 seconds at 2000 Hz
+- **settle_steps**: Pre-simulation steps to stabilize before training
+
+## Performance Results
+
+From README.md:129-136 (test comparison summary):
+
+```
+Performance Comparison:
+  Step 2 vs Step 1 (Rough vs Flat):      -40.9%
+  Step 3 vs Step 2 (Adaptive vs Rough):  +967.2%
+```
+
+### Quantitative Metrics (17-second trials)
+
+| Controller | Terrain | Distance | Velocity | vs Baseline Rough |
+|------------|---------|----------|----------|-------------------|
+| Baseline | Flat | 0.506 m | 0.030 m/s | +69.2% |
+| Baseline | Rough | 0.299 m | 0.018 m/s | **Baseline** |
+| **Adaptive RL** | Rough | **3.191 m** | **0.188 m/s** | **+967.2%** |
+
+<Info>
+The adaptive RL controller achieves **nearly 10× improvement** over the baseline on rough terrain, demonstrating the power of learned adaptation.
+</Info>
+
+## Training Workflow
+
+From README.md:77-87:
+
+```bash
+# Test with pre-trained model
+python3 tests/compare_baseline_adaptive.py \
+    --model runs/adaptive_gait_20251115_180640/final_model.zip \
+    --normalize runs/adaptive_gait_20251115_180640/vec_normalize.pkl \
+    --seconds 17
+```
+
+### Trained Model Files
+
+- `final_model.zip`: PPO policy network weights
+- `vec_normalize.pkl`: Observation normalization statistics (mean/std)
+
+<Accordion title="Why normalize observations?">
+From the VecNormalize wrapper (Stable Baselines 3):
+
+- Observations have vastly different scales (positions in meters, velocities in m/s, angles in radians)
+- Neural networks train better with inputs normalized to ~[-1, +1] range
+- Running mean/std are computed during training and frozen during evaluation
+- Improves learning speed by 2-5× in practice
+</Accordion>
+
+## Adaptive vs Residual Control
+
+### Residual-Only Approach
+
+```
+Baseline Gait → Add Residuals → IK → Robot
+```
+
+- Policy only adjusts foot positions
+- Gait parameters fixed at design time
+- Simpler action space (12D)
+
+### Adaptive Gait Approach (Current)
+
+```
+Baseline Gait → Modulate Parameters → Add Residuals → IK → Robot
+```
+
+- Policy adjusts both strategy and tactics
+- Can learn to step higher on rough terrain
+- Can slow down cycle time for stability
+- More expressive but harder to train (16D action space)
+
+<Note>
+The adaptive approach allows the policy to learn **hierarchical control**: high-level gait strategies (when to take bigger steps) combined with low-level corrections (where exactly to place each foot).
+</Note>
+
+## Related Topics
+
+- [Gait Control](/concepts/gait-control) - Baseline controller that RL builds upon
+- [Robot Design](/concepts/robot-design) - Hardware constraints affecting learning
+- [Inverse Kinematics](/concepts/inverse-kinematics) - Converting learned actions to joint commands

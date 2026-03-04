@@ -1,0 +1,329 @@
+---
+title: Inverse Kinematics
+description: 3-DOF parallel SCARA IK solver with analytical solutions and working mode selection
+---
+
+## Overview
+
+The robot uses an **analytical inverse kinematics (IK) solver** for its parallel SCARA leg mechanism. The solver computes joint angles that achieve desired foot positions in 3D space using **closed-form solutions** rather than iterative optimization.
+
+<Info>
+Analytical IK provides deterministic, real-time solutions with no convergence issues, making it ideal for high-frequency control loops (2000 Hz in MuJoCo simulation).
+</Info>
+
+## IK Parameters
+
+From `ik.py:34-39` and README.md:307-312:
+
+```python
+IK_PARAMS = dict(
+    L1=0.045,        # Upper link length (45mm)
+    L2=0.06,         # Lower link length (60mm)
+    base_dist=0.021, # Distance between parallel arms (21mm)
+    mode=2           # Default working mode (A down, B up)
+)
+```
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **L1** | 0.045 m | Shoulder-to-elbow link length |
+| **L2** | 0.06 m | Elbow-to-foot link length |
+| **base_dist** | 0.021 m | Separation between parallel arm bases |
+| **mode** | 2 | Elbow configuration (1-4) |
+
+## 3-DOF IK Problem
+
+Given a target foot position `[x, y, z]` in the leg's local frame, solve for three joint angles:
+
+1. **Tilt angle** (θ_tilt): Rotation about X-axis for lateral positioning
+2. **Shoulder A angle** (θ1_A): Left arm shoulder joint
+3. **Shoulder B angle** (θ1_B): Right arm shoulder joint
+
+<Note>
+Elbow angles are **kinematically constrained** by the 5-bar linkage and are not independent DOF. They're computed automatically from shoulder angles.
+</Note>
+
+## IK Solution Approach
+
+The solver decomposes the 3D problem into two stages:
+
+### Stage 1: Handle Tilt (3D → 2D Projection)
+
+From `ik.py:82-102`:
+
+```python
+def parallel_scara_ik_3dof(target_3d, L1=None, L2=None, base_dist=None, 
+                            mode=None, tilt_angle=None):
+    x, y, z = target_3d
+    
+    # If tilt angle not specified, compute it based on desired y-position
+    if tilt_angle is None:
+        if abs(z) > 1e-6:
+            tilt_angle = math.atan2(y, abs(z))
+        else:
+            tilt_angle = 0.0
+    
+    # Transform target to tilted leg frame
+    cos_tilt = math.cos(tilt_angle)
+    sin_tilt = math.sin(tilt_angle)
+    
+    # Project target onto the tilted plane
+    z_eff = z * cos_tilt + y * sin_tilt  # Effective Z in tilted frame
+    y_eff = -z * sin_tilt + y * cos_tilt  # Should be ~0 for planar motion
+    
+    # Target in the 2D plane for SCARA IK
+    target_2d = np.array([x, -z_eff])  # Note: negative z (leg extends down)
+```
+
+**Tilt computation**:
+- Automatically computes tilt from desired Y-displacement: `tilt = atan2(y, |z|)`
+- Rotates target into the leg's planar working frame
+- Maps 3D problem to 2D SCARA problem
+
+### Stage 2: Solve 2D Parallel SCARA
+
+From `ik.py:28-56`:
+
+```python
+def parallel_scara_ik(target, L1=None, L2=None, base_dist=None, mode=None):
+    # Define elbow configurations
+    configs = {
+        1: (True, False),   # A up, B down
+        2: (False, True),   # A down, B up (DEFAULT)
+        3: (True, True),    # Both up
+        4: (False, False)   # Both down
+    }
+    elbow_A, elbow_B = configs.get(mode, (True, False))
+    
+    # Base positions
+    base_A = np.array([-base_dist/2, 0])  # Left arm base
+    base_B = np.array([base_dist/2, 0])   # Right arm base
+    
+    # Solve for each arm
+    sol_A = solve_2link_ik(target, base_A, L1, L2, elbow_A)
+    sol_B = solve_2link_ik(target, base_B, L1, L2, elbow_B)
+    
+    if sol_A is None or sol_B is None:
+        return None  # Target unreachable
+    
+    return (*sol_A, *sol_B)  # (θ1_A, θ2_A, θ1_B, θ2_B)
+```
+
+The parallel SCARA is solved by treating it as **two independent 2-link planar arms** that must both reach the same target point.
+
+## 2-Link Planar IK
+
+Each parallel arm uses the standard **2R planar arm solution**.
+
+### Geometric Solution
+
+From `ik.py:5-26`:
+
+```python
+def solve_2link_ik(target, base, L1, L2, elbow_up):
+    """Solve 2-link planar arm IK."""
+    dx, dy = target - base
+    dist = np.linalg.norm([dx, dy])
+    
+    # Check reachability
+    if not (abs(L1 - L2) <= dist <= L1 + L2):
+        return None
+    
+    # Base to target angle
+    alpha = math.atan2(dy, dx)
+    
+    # Elbow angle (law of cosines)
+    cos_t2 = (dist**2 - L1**2 - L2**2) / (2 * L1 * L2)
+    cos_t2 = np.clip(cos_t2, -1, 1)
+    theta2 = math.acos(cos_t2) * (1 if elbow_up else -1)
+    
+    # Shoulder angle
+    beta = math.atan2(L2 * math.sin(theta2), L1 + L2 * math.cos(theta2))
+    theta1 = alpha - beta
+    
+    return theta1, theta2
+```
+
+### Key Steps
+
+1. **Reachability check**: `|L1 - L2| ≤ distance ≤ L1 + L2`
+   - Min reach: 0.015 m (|0.045 - 0.06|)
+   - Max reach: 0.105 m (0.045 + 0.06)
+
+2. **Elbow angle** (θ2): Law of cosines
+   ```
+   cos(θ2) = (d² - L1² - L2²) / (2·L1·L2)
+   ```
+
+3. **Shoulder angle** (θ1): Geometric decomposition
+   ```
+   θ1 = atan2(dy, dx) - atan2(L2·sin(θ2), L1 + L2·cos(θ2))
+   ```
+
+<Accordion title="Why two solutions per arm?">
+The `elbow_up` boolean selects between two valid configurations:
+
+- **Elbow up** (θ2 > 0): Arm bends upward
+- **Elbow down** (θ2 < 0): Arm bends downward
+
+For the parallel SCARA, we can independently choose elbow configurations for both arms, giving 4 total working modes. This is crucial for workspace coverage and singularity avoidance.
+</Accordion>
+
+## Working Modes
+
+The parallel SCARA has **4 distinct working modes** based on elbow configurations:
+
+| Mode | Arm A Elbow | Arm B Elbow | Characteristics |
+|------|-------------|-------------|------------------|
+| **1** | Up | Down | Extended forward reach |
+| **2** | Down | Up | **Default** - balanced workspace |
+| **3** | Up | Up | High stance, reduced forward reach |
+| **4** | Down | Down | Low stance, compact |
+
+<Info>
+**Mode 2** is used throughout the codebase because it provides:
+- Best balance between vertical and horizontal reach
+- Smooth transitions across the workspace
+- Minimal proximity to singularities
+</Info>
+
+### Mode Comparison Example
+
+From `ik.py:131-157`, test results for target `[0, 0.01, -0.04]`:
+
+```
+=== 3DOF IK Test ===
+Up-Down:   Tilt[-14.0°] A[  31.8°] B[ -31.8°]
+Down-Up:   Tilt[-14.0°] A[ -31.8°] B[  31.8°]  ← Mode 2 (Default)
+Up-Up:     Tilt[-14.0°] A[  48.2°] B[  48.2°]
+Down-Down: Tilt[-14.0°] A[ -48.2°] B[ -48.2°]
+```
+
+All modes reach the same target but with different joint configurations. Mode 2 shows **symmetric opposite angles**, indicating balanced load distribution.
+
+## Workspace Analysis
+
+### Reachable Region
+
+For a single 2-link arm:
+- **Annulus shape**: Donut-shaped region in 2D
+- **Inner radius**: 15 mm (minimum reach)
+- **Outer radius**: 105 mm (maximum reach)
+
+For the parallel SCARA:
+- **Constrained workspace**: Intersection of both arms' reachable regions
+- **Offset by base_dist**: Centers offset by ±10.5 mm
+
+<Note>
+The workspace is further constrained by physical servo limits and collision avoidance. Practical reach is typically kept within 30-80mm radius.
+</Note>
+
+### Typical Gait Targets
+
+From gait controller default parameters:
+- **Stance height**: 70 mm (well within reach)
+- **Step length**: ±25 mm (half of 50mm stride)
+- **Step height**: 15 mm lift (total: 70 - 15 = 55 mm)
+
+All gait targets fall safely within the central workspace region.
+
+## Convenience Function
+
+The main API for leg IK is:
+
+From `ik.py:115-128`:
+
+```python
+def solve_leg_ik_3dof(target_position, tilt_angle=None, L1=None, L2=None, 
+                      base_dist=None, mode=None):
+    """Convenience function for solving 3DOF leg IK.
+    
+    Args:
+        target_position: [x, y, z] target in leg frame
+        tilt_angle: Desired tilt angle (None for auto)
+        L1, L2, base_dist: Leg geometry (loaded from config if None)
+        mode: SCARA configuration mode (loaded from config if None)
+    
+    Returns:
+        (tilt, shoulder_L, shoulder_R) angles or None
+    """
+    return parallel_scara_ik_3dof(target_position, L1, L2, base_dist, 
+                                   mode, tilt_angle)
+```
+
+### Usage Example
+
+From `height_control.py` and `envs/adaptive_gait_env.py:355-357`:
+
+```python
+# Get foot target from gait controller
+target = gait_controller.update(dt)["FL"]
+
+# Apply coordinate frame conversion
+target_local = target.copy()
+target_local[0] *= FORWARD_SIGN  # -1.0 to match IK convention
+
+# Solve IK
+result = solve_leg_ik_3dof(target_local, **IK_PARAMS)
+if result is not None:
+    tilt, shoulder_A, shoulder_B = result
+    apply_leg_angles(data, "FL", result)
+```
+
+## Singularities and Edge Cases
+
+### Singularity Types
+
+1. **Full extension**: When `distance = L1 + L2`
+   - Arm fully stretched, θ2 = 0°
+   - Loss of DOF in radial direction
+
+2. **Full retraction**: When `distance = |L1 - L2|`
+   - Arm fully folded, θ2 = ±180°
+   - Unstable configuration
+
+3. **Parallel arm collision**: When arms intersect
+   - Prevented by mode selection and workspace limits
+
+<Accordion title="Handling unreachable targets">
+From `ik.py:10-12`, the reachability check returns `None` for unreachable targets:
+
+```python
+if not (abs(L1 - L2) <= dist <= L1 + L2):
+    return None
+```
+
+In practice, this is handled at the control level:
+- Gait controller generates targets within safe workspace
+- IK failures are logged but don't crash the controller
+- Previous valid joint angles are maintained until new valid solution found
+</Accordion>
+
+## Performance
+
+### Computational Cost
+
+- **2-link IK**: ~10-20 floating point operations
+- **Parallel SCARA**: 2× 2-link IK + validation
+- **3-DOF total**: ~50-100 FLOPs per leg
+- **All 4 legs**: ~200-400 FLOPs per control cycle
+
+<Info>
+At 2000 Hz control frequency, this represents **less than 1% CPU usage** on modern hardware, leaving ample computation for sensing, planning, and learning.
+</Info>
+
+### Comparison to Iterative Methods
+
+| Aspect | Analytical IK | Iterative (Jacobian) |
+|--------|---------------|----------------------|
+| **Speed** | ~50 FLOPs | ~1000+ FLOPs/iteration |
+| **Determinism** | Always same result | Depends on initialization |
+| **Convergence** | Instant | 5-50 iterations |
+| **Failure mode** | Returns None | May not converge |
+| **Real-time guarantee** | Yes | No |
+
+## Related Topics
+
+- [Robot Design](/concepts/robot-design) - Hardware geometry defining IK parameters
+- [Gait Control](/concepts/gait-control) - Generating foot targets for IK solver
+- [Reinforcement Learning](/concepts/reinforcement-learning) - Learning residual corrections

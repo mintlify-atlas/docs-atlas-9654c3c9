@@ -1,0 +1,355 @@
+---
+title: "AdaptiveGaitController"
+description: "Gait controller with online parameter adaptation and residual corrections"
+---
+
+## Overview
+
+The `AdaptiveGaitController` extends the diagonal gait pattern with online adaptation capabilities. It supports both high-level gait parameter modulation (step height, step length, cycle time, body height) and low-level per-leg residual corrections, enabling the robot to adapt its gait to rough terrain during operation.
+
+## Class Definition
+
+```python
+class AdaptiveGaitController:
+    """Gait controller with online parameter adaptation."""
+    
+    def __init__(
+        self,
+        base_params: Optional[GaitParameters] = None,
+        residual_scale: float = 0.01,
+        param_ranges: Optional[Dict[str, tuple]] = None,
+    ) -> None:
+```
+
+<ParamField path="base_params" type="GaitParameters | None" default="None">
+  Nominal gait parameters used as baseline. If not provided, uses default `GaitParameters()`.
+</ParamField>
+
+<ParamField path="residual_scale" type="float" default="0.01">
+  Maximum absolute residual offset per axis [meters]. Residuals are clipped to `[-residual_scale, +residual_scale]`.
+</ParamField>
+
+<ParamField path="param_ranges" type="Dict[str, tuple] | None" default="None">
+  Min/max bounds for each trainable parameter. If not provided, uses `DEFAULT_RANGES`. Each tuple format: `(min_val, max_val, default_val)`.
+</ParamField>
+
+**Attributes:**
+- `base_params` (`GaitParameters`): Reference baseline parameters
+- `current_params` (`GaitParameters`): Currently active adapted parameters
+- `residual_scale` (`float`): Residual clipping threshold
+- `param_ranges` (`Dict[str, tuple]`): Parameter bounds
+- `base_controller` (`DiagonalGaitController`): Underlying gait generator
+
+## Default Parameter Ranges
+
+```python
+DEFAULT_RANGES = {
+    "step_height": (0.03, 0.090, 0.04),   # meters
+    "step_length": (0.030, 0.100, 0.06),  # meters
+    "cycle_time": (0.800, 1.500, 0.80),   # seconds (min clamped to 0.8)
+    "body_height": (0.04, 0.055, 0.05),   # meters
+}
+```
+
+Each tuple defines `(minimum, maximum, default)` values for the trainable parameters.
+
+## Methods
+
+### update_with_residuals
+
+```python
+def update_with_residuals(
+    self,
+    dt: float,
+    residuals: Dict[str, np.ndarray],
+    param_deltas: Optional[Dict[str, float]] = None,
+) -> Dict[str, np.ndarray]:
+    """Update gait with parameter adaptation and residuals."""
+```
+
+Main update method that combines parameter adaptation and residual corrections.
+
+<ParamField path="dt" type="float" required>
+  Timestep in seconds to advance the gait
+</ParamField>
+
+<ParamField path="residuals" type="Dict[str, np.ndarray]" required>
+  Per-leg residual offsets. Keys are leg names (`"FL"`, `"FR"`, `"RL"`, `"RR"`), values are `[dx, dy, dz]` arrays in meters.
+</ParamField>
+
+<ParamField path="param_deltas" type="Dict[str, float] | None" default="None">
+  Optional parameter deltas to apply this step. Keys: `"step_height"`, `"step_length"`, `"cycle_time"`, `"body_height"`. Values are deltas (not absolute values).
+</ParamField>
+
+**Returns:** `Dict[str, np.ndarray]`
+
+Final foot targets per leg after applying base trajectory, parameter adaptation, and residuals.
+
+**Behavior:**
+1. Applies parameter deltas if provided (with range clipping)
+2. Rebuilds base controller if parameters changed
+3. Gets nominal targets from base controller
+4. Adds clipped residuals to targets
+
+### update_parameters
+
+```python
+def update_parameters(self, param_deltas: Dict[str, float]) -> None:
+    """Apply deltas to gait parameters with clipping."""
+```
+
+Updates gait parameters by applying deltas and clipping to valid ranges.
+
+<ParamField path="param_deltas" type="Dict[str, float]" required>
+  Dictionary with parameter names as keys and delta values. Example: `{"step_height": 0.01, "cycle_time": -0.1}`
+</ParamField>
+
+**Note:** This marks parameters as "dirty" and triggers controller rebuild on next update.
+
+### reset
+
+```python
+def reset(self) -> None:
+    """Reset to base parameters and phase."""
+```
+
+Resets the controller to initial base parameters and rebuilds the underlying gait controller.
+
+### get_current_parameters
+
+```python
+def get_current_parameters(self) -> Dict[str, float]:
+    """Return current adapted parameter values."""
+```
+
+**Returns:** `Dict[str, float]`
+
+Dictionary with keys: `"step_height"`, `"step_length"`, `"cycle_time"`, `"body_height"` and their current values.
+
+### get_phase_info
+
+```python
+def get_phase_info(self) -> Dict[str, float]:
+    """Return gait phase information."""
+```
+
+**Returns:** `Dict[str, float]`
+
+```python
+{
+    "phase_elapsed": float,      # Time elapsed in current state [seconds]
+    "state_duration": float,     # Duration of current state [seconds]
+    "phase_normalized": float,   # Normalized phase ∈ [0, 1]
+    "active_pair": float,        # 0 for pair_a_swing, 1 for pair_b_swing
+}
+```
+
+### get_swing_stance_flags
+
+```python
+def get_swing_stance_flags(self) -> Dict[str, int]:
+    """Return 1 for swing legs, 0 for stance legs."""
+```
+
+**Returns:** `Dict[str, int]`
+
+Mapping from leg name to binary flag (1 = swing, 0 = stance).
+
+## Usage Examples
+
+### Basic Usage
+
+```python
+from controllers.adaptive_gait_controller import AdaptiveGaitController
+from gait_controller import GaitParameters, LEG_NAMES
+import numpy as np
+
+# Initialize with base parameters
+base_params = GaitParameters(
+    body_height=0.05,
+    step_length=0.06,
+    step_height=0.04,
+    cycle_time=0.8,
+)
+
+controller = AdaptiveGaitController(
+    base_params=base_params,
+    residual_scale=0.01,
+)
+
+# Update with zero residuals (nominal gait)
+zero_residuals = {leg: np.zeros(3) for leg in LEG_NAMES}
+targets = controller.update_with_residuals(dt=0.01, residuals=zero_residuals)
+```
+
+### Parameter Adaptation
+
+```python
+from controllers.adaptive_gait_controller import AdaptiveGaitController
+from gait_controller import GaitParameters
+import numpy as np
+
+base_params = GaitParameters(
+    body_height=0.05,
+    step_length=0.06,
+    step_height=0.04,
+    cycle_time=0.8,
+)
+controller = AdaptiveGaitController(base_params=base_params)
+
+# Adapt parameters during runtime
+param_deltas = {
+    "step_height": 0.01,   # Increase step height by 1cm
+    "step_length": -0.01,  # Decrease step length by 1cm
+}
+
+zero_res = {leg: np.zeros(3) for leg in ["FL", "FR", "RL", "RR"]}
+targets = controller.update_with_residuals(
+    dt=0.01,
+    residuals=zero_res,
+    param_deltas=param_deltas,
+)
+
+# Check updated parameters
+current = controller.get_current_parameters()
+print(f"New step height: {current['step_height']:.3f}m")
+print(f"New step length: {current['step_length']:.3f}m")
+```
+
+### Combined Adaptation and Residuals
+
+```python
+from controllers.adaptive_gait_controller import AdaptiveGaitController
+from gait_controller import GaitParameters, LEG_NAMES
+import numpy as np
+
+base_params = GaitParameters(
+    body_height=0.05,
+    step_length=0.06,
+    step_height=0.04,
+    cycle_time=0.8,
+)
+controller = AdaptiveGaitController(
+    base_params=base_params,
+    residual_scale=0.02,  # Allow larger residuals
+)
+
+# Apply both parameter deltas and residual corrections
+param_deltas = {"step_height": 0.005}  # Slightly increase lift
+residuals = {
+    "FL": np.array([0.01, 0.0, -0.01]),   # Adjust FL leg
+    "FR": np.array([0.01, 0.0, 0.0]),
+    "RL": np.array([0.0, 0.0, -0.01]),
+    "RR": np.array([0.0, 0.0, 0.0]),
+}
+
+targets = controller.update_with_residuals(
+    dt=0.01,
+    residuals=residuals,
+    param_deltas=param_deltas,
+)
+
+# Query gait state
+phase_info = controller.get_phase_info()
+swing_flags = controller.get_swing_stance_flags()
+
+print(f"Phase: {phase_info['phase_normalized']:.2f}")
+for leg in LEG_NAMES:
+    state = "swing" if swing_flags[leg] else "stance"
+    print(f"{leg}: {state} -> {targets[leg]}")
+```
+
+### Custom Parameter Ranges
+
+```python
+from controllers.adaptive_gait_controller import AdaptiveGaitController
+from gait_controller import GaitParameters
+
+# Define custom bounds for training
+custom_ranges = {
+    "step_height": (0.02, 0.08, 0.04),   # Wider range
+    "step_length": (0.04, 0.10, 0.06),
+    "cycle_time": (0.6, 1.5, 0.8),
+    "body_height": (0.035, 0.065, 0.05),
+}
+
+controller = AdaptiveGaitController(
+    base_params=GaitParameters(),
+    residual_scale=0.015,
+    param_ranges=custom_ranges,
+)
+```
+
+## Integration with RL Policies
+
+This controller is designed for reinforcement learning policies that output:
+1. **High-level adaptation**: Parameter deltas for terrain adaptation
+2. **Low-level corrections**: Per-leg residuals for fine control
+
+```python
+# Typical RL policy interface
+class GaitAdaptationPolicy:
+    def predict(self, observation):
+        # Policy outputs parameter deltas and residuals
+        param_deltas = {
+            "step_height": 0.01,
+            "cycle_time": -0.05,
+        }
+        residuals = {
+            "FL": np.array([0.005, 0.0, -0.002]),
+            "FR": np.array([0.003, 0.0, 0.001]),
+            "RL": np.array([0.0, 0.0, -0.003]),
+            "RR": np.array([0.002, 0.0, 0.0]),
+        }
+        return param_deltas, residuals
+
+# Use in control loop
+policy = GaitAdaptationPolicy()
+for step in range(1000):
+    obs = get_observation()
+    param_deltas, residuals = policy.predict(obs)
+    targets = controller.update_with_residuals(
+        dt=0.01,
+        residuals=residuals,
+        param_deltas=param_deltas,
+    )
+    apply_targets_to_robot(targets)
+```
+
+## Implementation Notes
+
+### Controller Rebuilding
+
+When parameters change, the underlying `DiagonalGaitController` is rebuilt to update:
+- Swing Bézier curve control points
+- State duration (half of cycle time)
+- Body height and step dimensions
+
+The rebuild attempts to preserve gait phase, but some discontinuity may occur if `cycle_time` changes significantly.
+
+### Residual Clipping
+
+Residuals are clipped element-wise to prevent extreme corrections:
+```python
+res_clipped = np.clip(res, -residual_scale, residual_scale)
+```
+
+This ensures stability even if the policy outputs large values.
+
+### Parameter Bounds
+
+All parameter updates are clipped to the defined ranges:
+```python
+new_val = np.clip(current + delta, min_val, max_val)
+```
+
+This prevents physically invalid configurations (e.g., negative step height).
+
+## Source
+
+Location: `~/workspace/source/controllers/adaptive_gait_controller.py`
+
+Dependencies:
+- `gait_controller.DiagonalGaitController`
+- `gait_controller.GaitParameters`
+- `gait_controller.LEG_NAMES`

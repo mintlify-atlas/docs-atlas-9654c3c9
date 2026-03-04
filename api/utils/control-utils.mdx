@@ -1,0 +1,155 @@
+---
+title: Control Utilities
+description: MuJoCo actuator control mapping and leg angle application
+---
+
+## Overview
+
+The control utilities module provides the actuator mapping and helper functions to apply inverse kinematics solutions to the MuJoCo simulation. It handles the leg-specific transformations, sign corrections, and offset adjustments required to map joint angles to actuator control slots.
+
+## apply_leg_angles()
+
+Maps IK output angles into the correct actuator ordering for a specified leg.
+
+```python
+def apply_leg_angles(
+    ctrl: mujoco.MjData,
+    leg: str,
+    angles: Tuple[float, float, float]
+) -> None
+```
+
+### Parameters
+
+<ParamField path="ctrl" type="mujoco.MjData" required>
+  MuJoCo data object. The function writes target actuator positions to `ctrl.ctrl`.
+</ParamField>
+
+<ParamField path="leg" type="str" required>
+  Leg identifier. Must be one of:
+  - `"FL"` - Front Left
+  - `"FR"` - Front Right
+  - `"RL"` - Rear Left
+  - `"RR"` - Rear Right
+</ParamField>
+
+<ParamField path="angles" type="Tuple[float, float, float]" required>
+  Joint angles `(tilt, shoulder_left, shoulder_right)` in radians from IK solver.
+</ParamField>
+
+### Returns
+
+**None**: Modifies `ctrl.ctrl` in place.
+
+### Usage Example
+
+```python
+import mujoco
+from source.ik import solve_leg_ik_3dof
+from source.utils.control_utils import apply_leg_angles
+import numpy as np
+
+# Load MuJoCo model
+model = mujoco.MjModel.from_xml_path("robot.xml")
+data = mujoco.MjData(model)
+
+# Define target position for front-left leg
+target = np.array([0.0, 0.01, -0.04])  # 1cm forward, 4cm down
+
+# Solve IK
+angles = solve_leg_ik_3dof(target)
+
+if angles:
+    # Apply angles to actuators
+    apply_leg_angles(data, "FL", angles)
+    
+    # Step simulation
+    mujoco.mj_step(model, data)
+```
+
+### Multi-Leg Control Example
+
+```python
+# Control all four legs simultaneously
+from source.utils.control_utils import apply_leg_angles
+import numpy as np
+
+# Define targets for each leg
+targets = {
+    "FL": np.array([0.0, 0.01, -0.04]),
+    "FR": np.array([0.0, 0.01, -0.04]),
+    "RL": np.array([0.0, -0.01, -0.04]),
+    "RR": np.array([0.0, -0.01, -0.04]),
+}
+
+# Solve IK and apply for each leg
+for leg_name, target in targets.items():
+    angles = solve_leg_ik_3dof(target)
+    if angles:
+        apply_leg_angles(data, leg_name, angles)
+
+# Execute simulation step
+mujoco.mj_step(model, data)
+```
+
+## LEG_CONTROL
+
+Actuator mapping configuration dictionary containing the actuator indices, sign corrections, and offset adjustments for each leg.
+
+```python
+LEG_CONTROL: Dict[str, LegControl] = {
+    "FL": LegControl(indices=(0, 1, 2), sign=-1.0, offset=-np.pi),
+    "FR": LegControl(indices=(6, 7, 8), sign=1.0, offset=np.pi),
+    "RL": LegControl(indices=(3, 4, 5), sign=-1.0, offset=-np.pi),
+    "RR": LegControl(indices=(9, 10, 11), sign=1.0, offset=np.pi),
+}
+```
+
+### LegControl Dataclass
+
+```python
+@dataclass(frozen=True)
+class LegControl:
+    indices: Tuple[int, int, int]  # (left_shoulder, right_shoulder, tilt)
+    sign: float                     # Sign correction for leg orientation
+    offset: float                   # Angular offset for right shoulder
+```
+
+## Actuator Index Mapping
+
+The actuator control array (`ctrl.ctrl`) has 12 slots corresponding to the joints:
+
+| Index | Joint | Leg |
+|-------|-------|-----|
+| 0 | Left Shoulder | FL |
+| 1 | Right Shoulder | FL |
+| 2 | Tilt | FL |
+| 3 | Left Shoulder | RL |
+| 4 | Right Shoulder | RL |
+| 5 | Tilt | RL |
+| 6 | Left Shoulder | FR |
+| 7 | Right Shoulder | FR |
+| 8 | Tilt | FR |
+| 9 | Left Shoulder | RR |
+| 10 | Right Shoulder | RR |
+| 11 | Tilt | RR |
+
+### Sign and Offset Corrections
+
+- **Left legs (FL, RL)**: `sign = -1.0`, `offset = -π`
+- **Right legs (FR, RR)**: `sign = 1.0`, `offset = π`
+
+These corrections account for:
+1. Mirror symmetry between left and right legs
+2. Physical mounting orientation differences
+3. URDF/XML joint zero position conventions
+
+## Usage Notes
+
+<Note>
+  Always call `apply_leg_angles()` after solving IK and before stepping the simulation. The function handles all necessary coordinate transformations automatically.
+</Note>
+
+<Warning>
+  Ensure the leg identifier string matches exactly: `"FL"`, `"FR"`, `"RL"`, or `"RR"`. Invalid leg names will raise a `KeyError`.
+</Warning>

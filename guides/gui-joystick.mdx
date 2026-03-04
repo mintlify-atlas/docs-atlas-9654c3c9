@@ -1,0 +1,515 @@
+---
+title: 'GUI & Joystick Control'
+description: 'Control the quadruped robot using PyQt5 GUI with gamepad support'
+---
+
+## Overview
+
+The `gui/gui.py` script provides a graphical interface for controlling the robot via ROS2. It features:
+- Live camera feed from robot's perspective
+- Real-time body state visualization (position, orientation)
+- Gamepad/joystick control integration
+- XY trajectory plotting
+- User authentication system
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Dependencies">
+    ```bash
+    pip install PyQt5 pygame pyqtgraph opencv-python
+    sudo apt install ros-humble-cv-bridge
+    ```
+  </Step>
+
+  <Step title="Connect Gamepad (Optional)">
+    Connect a USB gamepad or Bluetooth controller before starting the GUI.
+    
+    Supported controllers:
+    - Xbox controllers
+    - PlayStation DualShock/DualSense
+    - Generic USB gamepads
+    - Android gamepad apps (via Bluetooth)
+  </Step>
+
+  <Step title="Verify Gamepad Detection">
+    Test if your gamepad is recognized:
+    ```bash
+    python3 -c "import pygame; pygame.init(); pygame.joystick.init(); print(f'Joysticks: {pygame.joystick.get_count()}')"
+    ```
+    
+    Should output: `Joysticks: 1` (or higher)
+  </Step>
+</Steps>
+
+## Launching the GUI
+
+<Tabs>
+  <Tab title="With Simulation">
+    Launch both the simulation and GUI:
+    
+    **Terminal 1** (Simulation):
+    ```bash
+    cd ~/workspace/source
+    python3 sim.py --terrain flat
+    ```
+    
+    **Terminal 2** (GUI):
+    ```bash
+    cd ~/workspace/source
+    python3 gui/gui.py
+    ```
+    
+    The GUI window opens with a login screen.
+  </Tab>
+  
+  <Tab title="Standalone (Testing)">
+    You can launch the GUI without the simulation for interface testing:
+    ```bash
+    cd ~/workspace/source
+    python3 gui/gui.py
+    ```
+    
+    The GUI will start but show no camera feed (waiting for ROS2 messages).
+  </Tab>
+</Tabs>
+
+## User Authentication
+
+The GUI includes a role-based login system.
+
+### Default Credentials
+
+Credentials are stored in `gui/users.db` (SQLite database):
+
+| Username | Password | Role |
+|----------|----------|------|
+| admin | admin | owner |
+| user | user | user |
+
+### Login Process
+
+<Steps>
+  <Step title="Enter Credentials">
+    On the login tab:
+    1. Enter username
+    2. Enter password
+    3. Click "Login" button
+  </Step>
+
+  <Step title="Access Operation Tab">
+    After successful login:
+    - Switches to Operation tab automatically
+    - Login tab becomes disabled
+    - Interface configured based on user role
+  </Step>
+
+  <Step title="Owner vs User Roles">
+    **Owner Role**:
+    - Full access to all controls
+    - Owner panel visible
+    - Can restart simulation
+    
+    **User Role**:
+    - Basic controls only
+    - Owner panel hidden
+    - Can control movement
+  </Step>
+</Steps>
+
+<Warning>
+  The database stores passwords in plaintext. For production use, implement proper password hashing (bcrypt, argon2, etc.).
+</Warning>
+
+## Interface Overview
+
+After login, the main interface has three panels:
+
+<CardGroup cols={3}>
+  <Card title="Left Panel" icon="camera">
+    **Camera Feed**
+    - Live view from robot camera
+    - 640×480 resolution
+    - Updates at 10 Hz
+    - Scales to fit window
+  </Card>
+  
+  <Card title="Center Panel" icon="gauge">
+    **Body State Display**
+    - Position: X, Y, Z (meters)
+    - Orientation: Roll, Pitch, Yaw (degrees)
+    - Updates at 10 Hz
+    - XY trajectory plot (last 50 positions)
+  </Card>
+  
+  <Card title="Right Panel" icon="gamepad">
+    **Control Interface**
+    - D-pad direction indicators
+    - Arrow icons (orange = active)
+    - Shows current input state
+    - Button press indicators
+  </Card>
+</CardGroup>
+
+## Gamepad Controls
+
+The GUI polls the gamepad at 10ms intervals (`gui.py:151`).
+
+### Control Mapping
+
+<Tabs>
+  <Tab title="D-Pad / Hat">
+    **Directional Controls** (Hat 0)
+    
+    | Input | Action | ROS2 Command |
+    |-------|--------|-------------|
+    | ↑ Up | Move forward | `movement_command = 1` |
+    | ↓ Down | Move backward | `movement_command = 2` |
+    | ← Left | Reserved | (Not implemented) |
+    | → Right | Reserved | (Not implemented) |
+    | Center | Stop | `movement_command = 0` |
+    
+    Visual feedback: Arrow icons turn orange when pressed.
+  </Tab>
+  
+  <Tab title="Analog Sticks">
+    **Left Stick Fallback** (Axes 0, 1)
+    
+    If your controller doesn't have a D-pad, the left analog stick works as backup:
+    
+    | Axis | Direction | Threshold | Action |
+    |------|-----------|-----------|--------|
+    | Y < -0.5 | Up | -0.5 | Forward |
+    | Y > 0.5 | Down | 0.5 | Backward |
+    | X < -0.5 | Left | -0.5 | Reserved |
+    | X > 0.5 | Right | 0.5 | Reserved |
+    
+    Threshold prevents drift from triggering commands.
+  </Tab>
+  
+  <Tab title="Buttons">
+    **Button Controls**
+    
+    | Button | Function |
+    |--------|----------|
+    | Button 0 | Restart simulation |
+    | Other buttons | Logged to console |
+    
+    Button presses are logged:
+    ```
+    Button 0 pressed
+    Restart button detected - requesting simulation restart
+    ```
+    
+    <Note>
+      Button indices vary by controller model. Press buttons and check console output to identify their numbers.
+    </Note>
+  </Tab>
+</Tabs>
+
+### How It Works
+
+Gamepad polling implementation (`gui.py:394-491`):
+
+```python
+def poll_joystick(self):
+    pygame.event.pump()  # Process pygame events
+    
+    # Check D-pad (hat 0)
+    if self.joystick.get_numhats() > 0:
+        hat = self.joystick.get_hat(0)
+        # hat = (x, y) where x,y ∈ {-1, 0, 1}
+        
+        if hat[1] == 1:   # Up pressed
+            new_state['up'] = True
+        elif hat[1] == -1:  # Down pressed
+            new_state['down'] = True
+    
+    # Fallback to analog sticks
+    if self.joystick.get_numaxes() >= 2:
+        axis_x = self.joystick.get_axis(0)
+        axis_y = self.joystick.get_axis(1)
+        
+        if axis_y < -0.5:  # Up
+            new_state['up'] = True
+        elif axis_y > 0.5:  # Down
+            new_state['down'] = True
+    
+    # Publish ROS2 command if state changed
+    movement_command = 0
+    if new_state['up']:
+        movement_command = 1
+    elif new_state['down']:
+        movement_command = 2
+    
+    if movement_command != self.last_movement_command:
+        self.ros_node.publish_movement_command(movement_command)
+        self.last_movement_command = movement_command
+```
+
+## Display Features
+
+### Camera Feed
+
+**Implementation**: `gui.py:331-358`
+
+The camera feed updates every 100ms:
+1. Receives `sensor_msgs/Image` from `/robot_camera` topic
+2. Converts ROS Image → OpenCV array (via cv_bridge)
+3. Converts OpenCV array → QImage
+4. Converts QImage → QPixmap
+5. Scales to fit label while preserving aspect ratio
+6. Displays in `camera_label` widget
+
+### Body State
+
+**Implementation**: `gui.py:360-392`
+
+Displays real-time robot pose:
+
+<CodeGroup>
+  ```python Position (meters)
+  X: 0.1234  # Forward/backward
+  Y: 0.0056  # Left/right
+  Z: 0.0501  # Up/down (height)
+  ```
+  
+  ```python Orientation (degrees)
+  Roll:  2.34°  # Tilt left/right
+  Pitch: -1.23° # Tilt forward/back
+  Yaw:   0.12°  # Rotation around Z
+  ```
+</CodeGroup>
+
+### XY Trajectory Plot
+
+**Implementation**: `gui.py:200-226`, `gui.py:377-391`
+
+Real-time 2D trajectory visualization:
+- **Buffer size**: Last 50 positions
+- **Update rate**: 10 Hz (100ms)
+- **Rendering**: PyQtGraph scatter plot + line trail
+- **Style**: Blue points with connecting lines
+
+Features:
+- Auto-scaling axes
+- Grid overlay
+- Smooth transitions as buffer fills
+- Oldest points dropped when buffer full
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Gamepad Not Detected">
+    **Symptoms**: Console shows "No joystick detected"
+    
+    **Solutions**:
+    1. Check physical connection (USB/Bluetooth)
+    2. Test with jstest:
+       ```bash
+       sudo apt install joystick
+       jstest /dev/input/js0
+       ```
+    3. Verify pygame detects it:
+       ```bash
+       python3 -c "import pygame; pygame.init(); pygame.joystick.init(); print(pygame.joystick.get_count())"
+       ```
+    4. Try reconnecting the controller
+    5. Restart the GUI after connecting
+    
+    <Note>
+      The GUI continues to work without a gamepad (keyboard control via ROS2 commands).
+    </Note>
+  </Accordion>
+  
+  <Accordion title="Arrow Icons Not Changing">
+    **Symptoms**: D-pad arrows stay brown when pressed
+    
+    **Causes**:
+    1. **Wrong button mapping**: Your controller uses different indices
+    2. **Image files missing**: Check `gui/icons/` directory
+    3. **Polling too slow**: Increase timer frequency
+    
+    **Debug**:
+    Press buttons and check console for:
+    ```
+    Button X pressed
+    ```
+    This reveals your controller's button mapping.
+    
+    **Fix**: Edit `gui.py:410-426` to match your controller's hat/axis configuration.
+  </Accordion>
+  
+  <Accordion title="Camera Feed Frozen">
+    **Symptoms**: Camera shows old/static image
+    
+    **Checks**:
+    1. Verify `sim.py` is running
+    2. Check topic rate:
+       ```bash
+       ros2 topic hz /robot_camera
+       ```
+       Should show ~10 Hz
+    3. Look for errors in GUI terminal
+    4. Verify cv_bridge is installed:
+       ```bash
+       python3 -c "from cv_bridge import CvBridge"
+       ```
+  </Accordion>
+  
+  <Accordion title="Login Failed">
+    **Symptoms**: "Usuario o contraseña incorrectos" error
+    
+    **Solutions**:
+    1. Try default credentials:
+       - Username: `admin`, Password: `admin`
+       - Username: `user`, Password: `user`
+    2. Check database exists:
+       ```bash
+       ls -l gui/users.db
+       ```
+    3. Verify database contents:
+       ```bash
+       sqlite3 gui/users.db "SELECT * FROM users;"
+       ```
+    4. Recreate database if corrupted (see Database Management below)
+  </Accordion>
+  
+  <Accordion title="UI Elements Missing">
+    **Symptoms**: Panels not visible or misaligned
+    
+    **Causes**:
+    1. `.ui` file not found: Check `gui/untitled.ui` exists
+    2. PyQt5 version mismatch
+    3. Screen resolution too low
+    
+    **Fix**:
+    ```bash
+    # Reinstall PyQt5
+    pip install --upgrade --force-reinstall PyQt5
+    
+    # Check UI file
+    ls -l gui/untitled.ui
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Database Management
+
+The user database is stored in `gui/users.db`.
+
+### Viewing Users
+
+```bash
+sqlite3 gui/users.db "SELECT * FROM users;"
+```
+
+Output:
+```
+admin|admin|owner
+user|user|user
+```
+
+### Adding Users
+
+```bash
+sqlite3 gui/users.db <<EOF
+INSERT INTO users (username, password, role) 
+VALUES ('newuser', 'newpass', 'user');
+EOF
+```
+
+### Changing Passwords
+
+```bash
+sqlite3 gui/users.db <<EOF
+UPDATE users 
+SET password = 'new_secure_password' 
+WHERE username = 'admin';
+EOF
+```
+
+<Warning>
+  Implement proper password hashing for production use. Current implementation stores plaintext passwords.
+</Warning>
+
+### Recreating Database
+
+If the database becomes corrupted:
+
+```bash
+cd ~/workspace/source/gui
+rm users.db
+
+sqlite3 users.db <<EOF
+CREATE TABLE users (
+    username TEXT PRIMARY KEY,
+    password TEXT NOT NULL,
+    role TEXT NOT NULL
+);
+
+INSERT INTO users VALUES ('admin', 'admin', 'owner');
+INSERT INTO users VALUES ('user', 'user', 'user');
+EOF
+```
+
+## Customization
+
+### Changing Camera Update Rate
+
+Edit `gui.py:161`:
+```python
+self.camera_timer.start(100)  # Change from 100ms (10 Hz)
+```
+
+Options:
+- `50` = 20 Hz (smoother, more CPU)
+- `100` = 10 Hz (balanced)
+- `200` = 5 Hz (lower CPU)
+
+### Adjusting Trajectory Buffer Size
+
+Edit `gui.py:183`:
+```python
+self.xy_buffer_size = 50  # Change to store more/fewer positions
+```
+
+### Custom Controller Mapping
+
+If your gamepad uses different button indices:
+
+1. Run GUI and press buttons
+2. Note console output: `Button X pressed`
+3. Edit `gui.py:458` to map your restart button:
+   ```python
+   if i == 0:  # Change from 0 to your button number
+       print("Restart button detected")
+       self.ros_node.call_restart_service()
+   ```
+
+## Performance Tips
+
+<CardGroup cols={2}>
+  <Card title="Reduce CPU Usage" icon="microchip">
+    - Increase timer intervals (camera: 200ms, ROS: 20ms)
+    - Reduce trajectory buffer size (25 instead of 50)
+    - Lower camera resolution in `sim.py:233`
+  </Card>
+  
+  <Card title="Improve Responsiveness" icon="bolt">
+    - Decrease joystick polling interval (5ms instead of 10ms)
+    - Increase ROS spin frequency (5ms instead of 10ms)
+    - Use wired connection instead of Bluetooth
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="ROS2 Deep Dive" icon="network-wired" href="./ros2-integration">
+    Learn about the underlying ROS2 architecture
+  </Card>
+  <Card title="Performance Testing" icon="chart-line" href="./baseline-vs-adaptive">
+    Compare different control strategies quantitatively
+  </Card>
+</CardGroup>
